@@ -1,6 +1,8 @@
+# Migration patches intentionally unregistered: they target the legacy
+# "Cowberry *" doctype names, which on a bench that also has the separate
+# `cowberry_app` would hijack ITS doctypes. Fresh installs create the
+# correctly-named doctypes directly from JSON. For the original v15 site,
+# run the patches under patches/v0_0_*/ manually as a one-off.
 [pre_model_sync]
-erpera_driver_app.patches.v0_0_4.rename_doctypes_drop_cowberry
 
 [post_model_sync]
-erpera_driver_app.patches.v0_0_2.rename_module_to_cowberry_driver_app
-erpera_driver_app.patches.v0_0_3.rename_module_to_erpera_driver_app
