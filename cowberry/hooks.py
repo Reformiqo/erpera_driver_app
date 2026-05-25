@@ -7,9 +7,9 @@ app_description = "Cowberry Driver App ERP"
 app_email = "consultant.reformiqo@gmail.com"
 app_license = "MIT"
 
-# Fixtures — export only custom fields belonging to Cowberry App
+# Fixtures — export only custom fields belonging to Cowberry Driver App
 fixtures = [
-    {"dt": "Custom Field", "filters": [["module", "=", "Cowberry App"]]}
+    {"dt": "Custom Field", "filters": [["module", "=", "Cowberry Driver App"]]}
 ]
 
 # Document Events

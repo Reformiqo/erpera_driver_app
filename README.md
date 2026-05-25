@@ -52,7 +52,7 @@ The `cowberry` Frappe app is the server-side backbone for the Cowberry delivery 
 | Item | Value |
 |---|---|
 | Python package name | `cowberry` |
-| Frappe Module name | `Cowberry App` |
+| Frappe Module name | `Cowberry Driver App` |
 | Module folder | `cowberry/cowberry_app/` |
 | API namespace | `cowberry.api.*` |
 | Live host | `cowberry.frappe.cloud` |
@@ -1037,9 +1037,9 @@ Configured in `hooks.py`:
 | `Customer` | `validate` | `cowberry.api.wallet.guard_direct_wallet_balance_writes` |
 
 ### Fixtures
-Only custom fields with `module = "Cowberry App"` are exported:
+Only custom fields with `module = "Cowberry Driver App"` are exported:
 ```python
-fixtures = [{"dt": "Custom Field", "filters": [["module", "=", "Cowberry App"]]}]
+fixtures = [{"dt": "Custom Field", "filters": [["module", "=", "Cowberry Driver App"]]}]
 ```
 
 Regenerate after adding new custom fields:
@@ -1140,7 +1140,7 @@ cowberry_driver_app_erp/
     ├── hooks.py                     # doc_events, scheduler, fixtures, permissions
     ├── install.py                   # after_install: seed settings + roles
     ├── permissions.py               # row-level SQL filters for Driver role
-    ├── modules.txt                  # "Cowberry App"
+    ├── modules.txt                  # "Cowberry Driver App"
     ├── patches.txt
     ├── utils/
     │   ├── __init__.py
@@ -1190,6 +1190,25 @@ cowberry_driver_app_erp/
 ```bash
 bench --site cowberry.frappe.cloud migrate
 bench restart
+```
+
+### Troubleshooting: `bench migrate` fails with `No module named 'cowberry.cowberry_app.doctype.<x>'`
+
+Two installed apps both declared `Cowberry App` in their `modules.txt`
+(this app, plus a stale `cowberry` entry left over from an older install).
+Frappe resolved the `Cowberry App` Module Def to the wrong package and
+couldn't import the doctype. As of v0.0.2 this app uses the module name
+`Cowberry Driver App` instead, and the patch
+`cowberry.patches.v0_0_2.rename_module_to_cowberry_driver_app` moves
+existing live data onto it.
+
+If migrate still fails, also check the bench-side `sites/apps.txt` and
+`sites/apps.json` for orphan entries that don't correspond to a folder
+under `apps/`:
+```bash
+cat ~/frappe-bench/sites/apps.txt
+ls ~/frappe-bench/apps
+# remove any stale entries that have no matching apps/<name> directory
 ```
 
 ### Migration from cowberry_app v0.0.1

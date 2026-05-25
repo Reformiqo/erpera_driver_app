@@ -11,10 +11,16 @@ app (FRD v1.0). Lives at `cowberry.frappe.cloud`.
 
 - **App name** (Python package): `cowberry`  ← matches Flutter's hardcoded
   `cowberry.api.*` URL namespace. Do NOT rename.
-- **Module name** (Frappe Module Def): `Cowberry App`  ← matches the existing
-  Module Def on the live site. The mismatch between app name (`cowberry`)
-  and module name (`Cowberry App`) is intentional.
-- **Module folder**: `cowberry/cowberry_app/`
+- **Module name** (Frappe Module Def): `Cowberry Driver App`  ← renamed from
+  `Cowberry App` in v0.0.2. Another installed app (`cowberry_app`) also
+  declared `Cowberry App` in its `modules.txt`, so Frappe could resolve a
+  doctype to the wrong app's Python package and `bench migrate` failed with
+  `No module named 'cowberry.cowberry_app.doctype.<x>'`. The
+  `cowberry.patches.v0_0_2.rename_module_to_cowberry_driver_app` patch
+  moves existing live data onto the new Module Def.
+- **Module folder**: `cowberry/cowberry_app/`  ← folder name kept as-is to
+  preserve import paths (`cowberry.cowberry_app.doctype.<x>`); only the
+  Frappe Module Def label changed.
 
 ## Hard constraints (don't violate these)
 
@@ -36,7 +42,7 @@ app (FRD v1.0). Lives at `cowberry.frappe.cloud`.
    `Cowberry Reverse Logistics Settings`, and `CCD Order Item`. Renaming
    any of these orphans existing data. The word "Driver" in
    `Cowberry Driver Collection` / `Cowberry Driver Settings` is part of the
-   doctype name — do not "fix" it to "Cowberry App".
+   doctype name — do not "fix" it to "Cowberry Driver App".
 
 4. **135 custom fields are committed.** `cowberry/fixtures/custom_field.json`
    was generated from the live `tabCustom Field`. The fieldnames are used by
@@ -63,7 +69,7 @@ cowberry/
 ├── hooks.py                    # doc_events, scheduler, fixtures filter, permissions
 ├── install.py                  # after_install seeds Cowberry Driver Settings
 ├── permissions.py              # row-level filters for Driver role
-├── modules.txt                 # contains exactly: "Cowberry App"
+├── modules.txt                 # contains exactly: "Cowberry Driver App"
 ├── patches.txt
 ├── utils/
 │   ├── otp.py                  # OTP framework — has v1 (purpose+ref) and v2 (kwarg-style) APIs
@@ -116,12 +122,12 @@ cowberry/
 1. Add it in the Frappe UI (Customize Form) on the dev site.
 2. Export: `bench --site <name> export-fixtures --app cowberry` — this
    re-generates `cowberry/fixtures/custom_field.json` based on the
-   `module = "Cowberry App"` filter in `hooks.py`.
-3. Make sure the new field has `module = "Cowberry App"` set in Custom Field
-   doctype, otherwise the export will skip it.
+   `module = "Cowberry Driver App"` filter in `hooks.py`.
+3. Make sure the new field has `module = "Cowberry Driver App"` set in
+   Custom Field doctype, otherwise the export will skip it.
 
 ### Add a new doctype
-1. Create it in the UI under module **Cowberry App**.
+1. Create it in the UI under module **Cowberry Driver App**.
 2. Set autoname, naming series, permissions (System Manager + Delivery Manager
    read at minimum; Driver only if drivers will access it through the API).
 3. Export the JSON to `cowberry/cowberry_app/doctype/<snake_name>/<snake_name>.json`.
@@ -162,8 +168,18 @@ curl -b /tmp/cb.cookies https://dev.localhost/api/method/cowberry.api.driver.get
 - **`pe.cowberry_driver = ...`** in `cash_submission.py` is a Payment Entry
   custom **field** named `cowberry_driver`. Don't grep-replace `cowberry_driver`
   globally — you'll break custom field references.
-- **`Cowberry Driver Collection`** vs the module name **`Cowberry App`**: the
-  word "Driver" is part of two doctype names but NOT in the module name.
+- **`Cowberry Driver Collection`** vs the module name **`Cowberry Driver App`**:
+  both contain "Driver" — don't confuse "the doctype" with "the module".
+- **Module-name collision history.** This app's Frappe module used to be
+  `Cowberry App`. Another installed app (`cowberry_app`) also claimed that
+  name in its `modules.txt`, causing `bench migrate` to fail with
+  `No module named 'cowberry.cowberry_app.doctype.<x>'`. v0.0.2 renamed
+  this app's module to `Cowberry Driver App` (modules.txt, all doctype JSONs,
+  fixtures filter); the
+  `cowberry.patches.v0_0_2.rename_module_to_cowberry_driver_app` patch
+  rewrites `tabDocType.module` and `tabCustom Field.module` rows on existing
+  sites. Always set new doctypes/CFs to **Cowberry Driver App**, never the
+  old name.
 - **`razorpay_payment_status == "Confirmed"`** is a hard gate in
   `order.send_delivery_otp` for COD-Online — if you bypass it, drivers can
   deliver before money is received. The webhook in `payment.py` is the only
