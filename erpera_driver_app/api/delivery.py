@@ -35,7 +35,7 @@ def update_status(delivery_note, status, latitude=None, longitude=None, notes=No
             coords = validate_coords(latitude, longitude)
 
         # Log the attempt
-        attempt = frappe.new_doc("Cowberry Delivery Attempt Log")
+        attempt = frappe.new_doc("Delivery Attempt Log")
         attempt.delivery_note = delivery_note
         attempt.driver = employee
         attempt.attempt_status = status
@@ -71,10 +71,10 @@ def on_cancel_delivery_note(doc, method):
 def _sync_delivery_note(dn):
     try:
         idempotency_key = f"dn-submit-{dn.name}-{dn.modified}"
-        if frappe.db.exists("Cowberry Delivery Sync Log", {"idempotency_key": idempotency_key}):
+        if frappe.db.exists("Delivery Sync Log", {"idempotency_key": idempotency_key}):
             return
 
-        sync_log = frappe.new_doc("Cowberry Delivery Sync Log")
+        sync_log = frappe.new_doc("Delivery Sync Log")
         sync_log.idempotency_key = idempotency_key
         sync_log.delivery_note = dn.name
         sync_log.status = "Pending"

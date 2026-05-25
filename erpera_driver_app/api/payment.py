@@ -25,7 +25,7 @@ def get_status(delivery_note):
 @frappe.whitelist(allow_guest=True)
 def razorpay_webhook():
     try:
-        settings = frappe.get_single("Cowberry Driver Settings")
+        settings = frappe.get_single("Driver Settings")
         webhook_secret = settings.razorpay_webhook_secret
 
         raw_body = frappe.request.get_data(as_text=True)
@@ -64,7 +64,7 @@ def razorpay_webhook():
 def poll_pending_razorpay_orders():
     """Scheduler: poll Razorpay for payment status of pending orders."""
     try:
-        settings = frappe.get_single("Cowberry Driver Settings")
+        settings = frappe.get_single("Driver Settings")
         if not settings.razorpay_key_id or not settings.razorpay_key_secret:
             return
 

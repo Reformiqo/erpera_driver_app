@@ -5,7 +5,7 @@ def send_push(employee, title, body, payload=None):
     """Send a push notification to an employee's device(s)."""
     # Look up device tokens linked to the employee
     tokens = frappe.get_all(
-        "Cowberry Driver Settings",
+        "Driver Settings",
         filters={},
         fields=["fcm_server_key"],
         limit=1,
@@ -18,7 +18,7 @@ def send_push(employee, title, body, payload=None):
         return
 
     driver_tokens = frappe.get_all(
-        "Cowberry Driver Collection",
+        "Driver Collection",
         filters={"driver": employee, "docstatus": ["!=", 2]},
         fields=["device_token"],
         limit=1,

@@ -36,11 +36,11 @@ scheduler_events = {
 
 # Permission query conditions for row-level access
 permission_query_conditions = {
-    "Cowberry Cash Submission": "erpera_driver_app.permissions.cash_submission_query",
-    "Cowberry Driver Collection": "erpera_driver_app.permissions.driver_collection_query",
-    "Cowberry Wallet Transaction": "erpera_driver_app.permissions.wallet_transaction_query",
-    "Cowberry Delivery Attempt Log": "erpera_driver_app.permissions.delivery_attempt_log_query",
-    "Cowberry Reschedule Log": "erpera_driver_app.permissions.reschedule_log_query",
+    "Cash Submission": "erpera_driver_app.permissions.cash_submission_query",
+    "Driver Collection": "erpera_driver_app.permissions.driver_collection_query",
+    "Wallet Transaction": "erpera_driver_app.permissions.wallet_transaction_query",
+    "Delivery Attempt Log": "erpera_driver_app.permissions.delivery_attempt_log_query",
+    "Reschedule Log": "erpera_driver_app.permissions.reschedule_log_query",
 }
 
 # After install hook

@@ -42,7 +42,7 @@ def get_my_analytics(from_date=None, to_date=None):
         cash_stats = frappe.db.sql(
             """
             SELECT COALESCE(SUM(amount), 0) as total_cash_submitted
-            FROM `tabCowberry Cash Submission`
+            FROM `tabCash Submission`
             WHERE driver=%s AND docstatus=1
             """,
             [employee],

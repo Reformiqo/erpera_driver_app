@@ -38,7 +38,7 @@ def verify_reset_otp(log_name, otp):
 @frappe.whitelist(allow_guest=True)
 def reset_password(log_name, otp, new_password):
     try:
-        log = frappe.get_doc("Cowberry OTP Log", log_name)
+        log = frappe.get_doc("OTP Log", log_name)
         validate_otp_v2(log_name=log_name, otp_input=otp)
 
         user = frappe.get_doc("User", log.reference_name)

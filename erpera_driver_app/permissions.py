@@ -13,7 +13,7 @@ def cash_submission_query(user):
     employee = _get_driver_employee()
     if not employee:
         return ""
-    return f"`tabCowberry Cash Submission`.driver = {frappe.db.escape(employee)}"
+    return f"`tabCash Submission`.driver = {frappe.db.escape(employee)}"
 
 
 def driver_collection_query(user):
@@ -21,7 +21,7 @@ def driver_collection_query(user):
     employee = _get_driver_employee()
     if not employee:
         return ""
-    return f"`tabCowberry Driver Collection`.driver = {frappe.db.escape(employee)}"
+    return f"`tabDriver Collection`.driver = {frappe.db.escape(employee)}"
 
 
 def wallet_transaction_query(user):
@@ -32,7 +32,7 @@ def wallet_transaction_query(user):
     customer = frappe.db.get_value("Customer", {"cowberry_driver": employee}, "name")
     if not customer:
         return "1=0"
-    return f"`tabCowberry Wallet Transaction`.customer = {frappe.db.escape(customer)}"
+    return f"`tabWallet Transaction`.customer = {frappe.db.escape(customer)}"
 
 
 def delivery_attempt_log_query(user):
@@ -40,7 +40,7 @@ def delivery_attempt_log_query(user):
     employee = _get_driver_employee()
     if not employee:
         return ""
-    return f"`tabCowberry Delivery Attempt Log`.driver = {frappe.db.escape(employee)}"
+    return f"`tabDelivery Attempt Log`.driver = {frappe.db.escape(employee)}"
 
 
 def reschedule_log_query(user):
@@ -48,4 +48,4 @@ def reschedule_log_query(user):
     employee = _get_driver_employee()
     if not employee:
         return ""
-    return f"`tabCowberry Reschedule Log`.driver = {frappe.db.escape(employee)}"
+    return f"`tabReschedule Log`.driver = {frappe.db.escape(employee)}"

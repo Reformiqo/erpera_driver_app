@@ -10,11 +10,11 @@ from erpera_driver_app.utils.response import err, ok
 def initiate(collection_id, amount):
     try:
         employee = _require_driver()
-        col = frappe.get_doc("Cowberry Driver Collection", collection_id)
+        col = frappe.get_doc("Driver Collection", collection_id)
         if col.driver != employee:
             return err("ACCESS_DENIED", "This collection does not belong to you.", 403)
 
-        sub = frappe.new_doc("Cowberry Cash Submission")
+        sub = frappe.new_doc("Cash Submission")
         sub.driver = employee
         sub.collection = collection_id
         sub.amount = amount
@@ -24,7 +24,7 @@ def initiate(collection_id, amount):
         mobile = frappe.db.get_value("Employee", employee, "cell_number")
         log_name = dispatch_otp_v2(
             purpose=PURPOSE_CASH_SUBMISSION,
-            reference_doctype="Cowberry Cash Submission",
+            reference_doctype="Cash Submission",
             reference_name=sub.name,
             recipient_mobile=mobile or "",
         )
@@ -38,7 +38,7 @@ def initiate(collection_id, amount):
 def validate_otp_endpoint(submission_id, otp_log_name, otp):
     try:
         employee = _require_driver()
-        sub = frappe.get_doc("Cowberry Cash Submission", submission_id)
+        sub = frappe.get_doc("Cash Submission", submission_id)
         if sub.driver != employee:
             return err("ACCESS_DENIED", "This submission does not belong to you.", 403)
 
@@ -48,7 +48,7 @@ def validate_otp_endpoint(submission_id, otp_log_name, otp):
         sub.save(ignore_permissions=True)
 
         # Close the collection
-        col = frappe.get_doc("Cowberry Driver Collection", sub.collection)
+        col = frappe.get_doc("Driver Collection", sub.collection)
         col.status = "Closed"
         col.save(ignore_permissions=True)
 
@@ -65,7 +65,7 @@ def history(limit=20, offset=0):
     try:
         employee = _require_driver()
         submissions = frappe.get_all(
-            "Cowberry Cash Submission",
+            "Cash Submission",
             filters={"driver": employee},
             fields=["name", "amount", "status", "creation", "collection"],
             order_by="creation desc",

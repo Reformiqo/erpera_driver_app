@@ -14,7 +14,7 @@ _VALID_PURPOSES = {PURPOSE_POD, PURPOSE_CASH_SUBMISSION, PURPOSE_WALLET, PURPOSE
 
 
 def _get_settings():
-    return frappe.get_single("Cowberry Driver Settings")
+    return frappe.get_single("Driver Settings")
 
 
 def _generate_otp(length=6):
@@ -49,7 +49,7 @@ def dispatch_otp(purpose, reference_doctype, reference_name, recipient_mobile=No
     validity = _validity_minutes(purpose, settings)
     expiry = datetime.now() + timedelta(minutes=validity)
 
-    log = frappe.new_doc("Cowberry OTP Log")
+    log = frappe.new_doc("OTP Log")
     log.purpose = purpose
     log.reference_doctype = reference_doctype
     log.reference_name = reference_name
@@ -73,7 +73,7 @@ def dispatch_otp(purpose, reference_doctype, reference_name, recipient_mobile=No
 def validate_otp(log_name, otp_input):
     from erpera_driver_app.utils.exceptions import OTPExpiredError, OTPInvalidError, OTPMaxAttemptsError
 
-    log = frappe.get_doc("Cowberry OTP Log", log_name)
+    log = frappe.get_doc("OTP Log", log_name)
     settings = _get_settings()
 
     if log.is_used:

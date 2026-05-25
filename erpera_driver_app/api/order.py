@@ -110,7 +110,7 @@ def reschedule(delivery_note, reason, reschedule_date, notes=None):
         if not frappe.db.exists("Delivery Note", delivery_note):
             raise DeliveryNoteNotFoundError()
 
-        log = frappe.new_doc("Cowberry Reschedule Log")
+        log = frappe.new_doc("Reschedule Log")
         log.delivery_note = delivery_note
         log.driver = employee
         log.reason = reason

@@ -1,0 +1,47 @@
+{
+ "actions": [],
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "otp_section",
+  "otp_validity_pod",
+  "otp_validity_cash_submission",
+  "otp_validity_wallet",
+  "otp_validity_driver_login",
+  "otp_max_attempts",
+  "razorpay_section",
+  "razorpay_key_id",
+  "razorpay_key_secret",
+  "razorpay_webhook_secret",
+  "fcm_section",
+  "fcm_server_key"
+ ],
+ "fields": [
+  {"fieldname": "otp_section", "fieldtype": "Section Break", "label": "OTP Settings"},
+  {"fieldname": "otp_validity_pod", "fieldtype": "Int", "label": "OTP Validity POD (minutes)", "default": "10"},
+  {"fieldname": "otp_validity_cash_submission", "fieldtype": "Int", "label": "OTP Validity Cash Submission (minutes)", "default": "10"},
+  {"fieldname": "otp_validity_wallet", "fieldtype": "Int", "label": "OTP Validity Wallet (minutes)", "default": "10"},
+  {"fieldname": "otp_validity_driver_login", "fieldtype": "Int", "label": "OTP Validity Driver Login (minutes)", "default": "10"},
+  {"fieldname": "otp_max_attempts", "fieldtype": "Int", "label": "Max OTP Attempts", "default": "5"},
+  {"fieldname": "razorpay_section", "fieldtype": "Section Break", "label": "Razorpay"},
+  {"fieldname": "razorpay_key_id", "fieldtype": "Data", "label": "Razorpay Key ID"},
+  {"fieldname": "razorpay_key_secret", "fieldtype": "Password", "label": "Razorpay Key Secret"},
+  {"fieldname": "razorpay_webhook_secret", "fieldtype": "Password", "label": "Razorpay Webhook Secret"},
+  {"fieldname": "fcm_section", "fieldtype": "Section Break", "label": "Push Notifications"},
+  {"fieldname": "fcm_server_key", "fieldtype": "Password", "label": "FCM Server Key"}
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Erpera Driver App",
+ "name": "Driver Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

@@ -40,7 +40,7 @@ def _topup(amount=0, reference=None, **kwargs):
         if not customer:
             return err("NO_CUSTOMER", "No customer linked to this driver.")
 
-        txn = frappe.new_doc("Cowberry Wallet Transaction")
+        txn = frappe.new_doc("Wallet Transaction")
         txn.customer = customer
         txn.transaction_type = "Credit"
         txn.amount = float(amount)
@@ -63,7 +63,7 @@ def _deduct(amount=0, reference=None, **kwargs):
         if float(balance) < float(amount):
             raise WalletInsufficientError()
 
-        txn = frappe.new_doc("Cowberry Wallet Transaction")
+        txn = frappe.new_doc("Wallet Transaction")
         txn.customer = customer
         txn.transaction_type = "Debit"
         txn.amount = float(amount)
@@ -84,7 +84,7 @@ def _transaction_history(limit=20, offset=0, **kwargs):
         if not customer:
             return ok(data={"transactions": []})
         txns = frappe.get_all(
-            "Cowberry Wallet Transaction",
+            "Wallet Transaction",
             filters={"customer": customer},
             fields=["name", "transaction_type", "amount", "creation", "reference"],
             order_by="creation desc",
@@ -101,7 +101,7 @@ def guard_direct_wallet_balance_writes(doc, method):
     if method in ("before_save", "validate"):
         correct = frappe.db.sql(
             """SELECT COALESCE(SUM(CASE WHEN transaction_type='Credit' THEN amount ELSE -amount END), 0)
-               FROM `tabCowberry Wallet Transaction`
+               FROM `tabWallet Transaction`
                WHERE customer=%s AND docstatus=1""",
             doc.name,
         )[0][0] or 0.0

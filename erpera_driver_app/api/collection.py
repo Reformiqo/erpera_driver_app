@@ -13,7 +13,7 @@ def get_collection(date=None):
         if date:
             filters["collection_date"] = date
         collections = frappe.get_all(
-            "Cowberry Driver Collection",
+            "Driver Collection",
             filters=filters,
             fields=["name", "collection_date", "total_cash", "total_online", "docstatus", "status"],
             order_by="collection_date desc",
@@ -28,7 +28,7 @@ def get_collection(date=None):
 def submit_cash(collection_id, amount, notes=None):
     try:
         employee = _require_driver()
-        col = frappe.get_doc("Cowberry Driver Collection", collection_id)
+        col = frappe.get_doc("Driver Collection", collection_id)
         if col.driver != employee:
             return err("ACCESS_DENIED", "This collection does not belong to you.", 403)
         if col.docstatus == 1:
@@ -49,7 +49,7 @@ def submit_cash(collection_id, amount, notes=None):
 def daily_reset_driver_totals():
     """Scheduler: reset daily collection totals at midnight."""
     frappe.db.sql("""
-        UPDATE `tabCowberry Driver Collection`
+        UPDATE `tabDriver Collection`
         SET total_cash = 0, total_online = 0
         WHERE docstatus = 0
         AND collection_date < CURDATE()

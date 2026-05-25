@@ -9,8 +9,8 @@ def after_install():
 
 
 def _seed_driver_settings():
-    if not frappe.db.exists("Cowberry Driver Settings", "Cowberry Driver Settings"):
-        doc = frappe.new_doc("Cowberry Driver Settings")
+    if not frappe.db.exists("Driver Settings", "Driver Settings"):
+        doc = frappe.new_doc("Driver Settings")
         doc.otp_validity_pod = 10
         doc.otp_validity_cash_submission = 10
         doc.otp_validity_wallet = 10
@@ -22,9 +22,9 @@ def _seed_driver_settings():
 
 def _seed_reverse_logistics_settings():
     if not frappe.db.exists(
-        "Cowberry Reverse Logistics Settings", "Cowberry Reverse Logistics Settings"
+        "Reverse Logistics Settings", "Reverse Logistics Settings"
     ):
-        doc = frappe.new_doc("Cowberry Reverse Logistics Settings")
+        doc = frappe.new_doc("Reverse Logistics Settings")
         doc.enable_reverse_logistics = 0
         doc.max_return_days = 7
         doc.insert(ignore_permissions=True)
