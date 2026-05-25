@@ -3,11 +3,11 @@ requires = ["flit_core >=3.4,<4"]
 build-backend = "flit_core.buildapi"
 
 [project]
-name = "cowberry"
+name = "erpera_driver_app"
 authors = [
     { name = "Reformiqo", email = "consultant.reformiqo@gmail.com" }
 ]
-description = "Cowberry Driver App ERP"
+description = "Erpera Driver App ERP"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.0.1"

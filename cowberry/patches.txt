@@ -1,1 +1,0 @@
-cowberry.patches.v0_0_2.rename_module_to_cowberry_driver_app

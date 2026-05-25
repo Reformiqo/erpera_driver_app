@@ -1,0 +1,43 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "purpose",
+  "reference_doctype",
+  "reference_name",
+  "otp_hash",
+  "expires_at",
+  "is_used",
+  "attempts",
+  "recipient_mobile",
+  "recipient_email"
+ ],
+ "fields": [
+  {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "OTP-.YYYY.-.####"},
+  {"fieldname": "purpose", "fieldtype": "Select", "label": "Purpose", "options": "POD\nCASH_SUBMISSION\nWALLET\nDRIVER_LOGIN", "reqd": 1},
+  {"fieldname": "reference_doctype", "fieldtype": "Link", "label": "Reference DocType", "options": "DocType"},
+  {"fieldname": "reference_name", "fieldtype": "Dynamic Link", "label": "Reference Name", "options": "reference_doctype"},
+  {"fieldname": "otp_hash", "fieldtype": "Data", "label": "OTP Hash", "reqd": 1},
+  {"fieldname": "expires_at", "fieldtype": "Datetime", "label": "Expires At", "reqd": 1},
+  {"fieldname": "is_used", "fieldtype": "Check", "label": "Is Used", "default": "0"},
+  {"fieldname": "attempts", "fieldtype": "Int", "label": "Attempts", "default": "0"},
+  {"fieldname": "recipient_mobile", "fieldtype": "Data", "label": "Recipient Mobile"},
+  {"fieldname": "recipient_email", "fieldtype": "Data", "label": "Recipient Email"}
+ ],
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Erpera Driver App",
+ "name": "Cowberry OTP Log",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}

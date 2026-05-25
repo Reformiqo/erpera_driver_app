@@ -1,0 +1,2 @@
+erpera_driver_app.patches.v0_0_2.rename_module_to_cowberry_driver_app
+erpera_driver_app.patches.v0_0_3.rename_module_to_erpera_driver_app

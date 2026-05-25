@@ -1,0 +1,53 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "driver",
+  "collection_date",
+  "trip",
+  "status",
+  "totals_section",
+  "total_cash",
+  "total_online",
+  "total_wallet",
+  "order_breakdown",
+  "notes",
+  "device_token",
+  "amended_from"
+ ],
+ "fields": [
+  {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "DC-.YYYY.-.####"},
+  {"fieldname": "driver", "fieldtype": "Link", "label": "Driver", "options": "Employee", "reqd": 1},
+  {"fieldname": "collection_date", "fieldtype": "Date", "label": "Collection Date", "reqd": 1, "default": "Today"},
+  {"fieldname": "trip", "fieldtype": "Link", "label": "Trip", "options": "Delivery Trip"},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Open\nClosed\nSubmitted", "default": "Open"},
+  {"fieldname": "totals_section", "fieldtype": "Section Break", "label": "Totals"},
+  {"fieldname": "total_cash", "fieldtype": "Currency", "label": "Total Cash", "default": "0"},
+  {"fieldname": "total_online", "fieldtype": "Currency", "label": "Total Online", "default": "0"},
+  {"fieldname": "total_wallet", "fieldtype": "Currency", "label": "Total Wallet", "default": "0"},
+  {"fieldname": "order_breakdown", "fieldtype": "Table", "label": "Order Breakdown", "options": "CCD Order Item"},
+  {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"},
+  {"fieldname": "device_token", "fieldtype": "Data", "label": "Device Token", "hidden": 1},
+  {"fieldname": "amended_from", "fieldtype": "Link", "label": "Amended From", "options": "Cowberry Driver Collection", "print_hide": 1, "read_only": 1}
+ ],
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Erpera Driver App",
+ "name": "Cowberry Driver Collection",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "submit": 1, "cancel": 1, "amend": 1},
+  {"role": "Delivery Manager", "read": 1, "write": 1, "create": 1, "submit": 1},
+  {"role": "Driver", "read": 1, "write": 1, "create": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

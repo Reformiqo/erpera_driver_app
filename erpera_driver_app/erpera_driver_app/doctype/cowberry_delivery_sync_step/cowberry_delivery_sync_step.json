@@ -1,0 +1,28 @@
+{
+ "actions": [],
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "step_name",
+  "status",
+  "payload",
+  "error_message"
+ ],
+ "fields": [
+  {"fieldname": "step_name", "fieldtype": "Data", "label": "Step Name", "reqd": 1},
+  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Pending\nCompleted\nFailed", "default": "Pending"},
+  {"fieldname": "payload", "fieldtype": "Code", "label": "Payload", "options": "JSON"},
+  {"fieldname": "error_message", "fieldtype": "Small Text", "label": "Error Message"}
+ ],
+ "istable": 1,
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Erpera Driver App",
+ "name": "Cowberry Delivery Sync Step",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC"
+}
