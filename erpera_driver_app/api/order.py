@@ -152,19 +152,90 @@ def submit_proof(
             current_day_collected = new_total
             daily_limit = float(emp.get("daily_collection_limit") or 0)
 
+        # Auto-create Sales Invoice from the Delivery Note (FRD §6.2.2 /
+        # §6.3 row 12). Best-effort: a failure here doesn't roll back the
+        # PoD — the SI can be created later via the standard ERPNext
+        # "Create > Sales Invoice" button on the DN. Idempotent: skips
+        # creation when one already exists for the same DN.
+        sales_invoice = _ensure_sales_invoice(dn)
+
         frappe.db.commit()
+
+        invoice_pdf_url = None
+        if sales_invoice:
+            invoice_pdf_url = (
+                "/api/method/frappe.utils.print_format.download_pdf"
+                f"?doctype=Sales+Invoice&name={sales_invoice}&format=Standard"
+            )
+
         return ok(data={
             "delivery_note": dn.name,
             "delivery_status": "Delivered",
             "driver_collection": driver_collection,
             "current_day_collected": current_day_collected,
             "daily_limit": daily_limit,
+            "sales_invoice": sales_invoice,
+            "invoice_pdf_url": invoice_pdf_url,
             "message": "Proof submitted.",
         })
     except (DeliveryNoteNotFoundError, OTPInvalidError) as e:
         return e.to_response()
     except Exception as e:
         return err("SUBMIT_PROOF_FAILED", str(e))
+
+
+def _ensure_sales_invoice(dn):
+    """Create-and-submit a Sales Invoice from the DN, if missing.
+
+    Returns the Sales Invoice name (whether pre-existing or freshly
+    created) or None if creation failed. Idempotent: a DN that already
+    has a billed Sales Invoice short-circuits to the existing name so
+    a retried PoD doesn't double-bill the customer.
+    """
+    existing = frappe.db.sql(
+        """
+        SELECT DISTINCT si.name
+        FROM `tabSales Invoice` si
+        JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+        WHERE sii.delivery_note = %s AND si.docstatus < 2
+        LIMIT 1
+        """,
+        dn.name,
+    )
+    if existing:
+        si_name = existing[0][0]
+        # Persist the link on the DN custom field so the next API
+        # response can render it without rerunning this query.
+        if dn.get("sales_invoice") != si_name:
+            try:
+                frappe.db.set_value(
+                    "Delivery Note", dn.name, "sales_invoice", si_name
+                )
+            except Exception:
+                pass
+        return si_name
+
+    try:
+        from erpnext.stock.doctype.delivery_note.delivery_note import (
+            make_sales_invoice,
+        )
+        si = make_sales_invoice(dn.name)
+        si.set_missing_values()
+        si.insert(ignore_permissions=True)
+        si.submit()
+        try:
+            frappe.db.set_value(
+                "Delivery Note", dn.name, "sales_invoice", si.name
+            )
+        except Exception:
+            pass
+        return si.name
+    except Exception as e:
+        frappe.log_error(
+            title=f"submit_proof: SI auto-creation failed for {dn.name}",
+            message=str(e),
+        )
+        return None
 
 
 def _roll_into_collection(employee, dn):

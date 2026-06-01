@@ -91,6 +91,40 @@
  {
   "doctype": "Custom Field",
   "dt": "Delivery Note",
+  "fieldname": "razorpay_confirmed_at",
+  "fieldtype": "Datetime",
+  "label": "Razorpay Confirmed At",
+  "read_only": 1,
+  "description": "Set by the Razorpay webhook on payment.captured.",
+  "insert_after": "razorpay_order_id",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "razorpay_payment_entry",
+  "fieldtype": "Link",
+  "label": "Razorpay Payment Entry",
+  "options": "Payment Entry",
+  "read_only": 1,
+  "insert_after": "razorpay_confirmed_at",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "sales_invoice",
+  "fieldtype": "Link",
+  "label": "Sales Invoice",
+  "options": "Sales Invoice",
+  "read_only": 1,
+  "description": "Auto-created on Proof of Delivery (FRD §6.2.2).",
+  "insert_after": "razorpay_payment_entry",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
   "fieldname": "cowberry_pod_section",
   "fieldtype": "Section Break",
   "label": "Proof of Delivery",
@@ -353,6 +387,17 @@
   "label": "Warehouse Manager Mobile",
   "description": "Fallback channel for cash-handover OTP if email is down.",
   "insert_after": "warehouse_manager_email",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Warehouse",
+  "fieldname": "warehouse_cash_account",
+  "fieldtype": "Link",
+  "label": "Warehouse Cash Account",
+  "options": "Account",
+  "description": "paid_to account for Cash Submission Internal-Transfer Payment Entries (FRD §4.2).",
+  "insert_after": "warehouse_manager_mobile",
   "module": "Erpera Driver App"
  }
 ]

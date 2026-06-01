@@ -137,13 +137,18 @@ def initiate(
 
 @frappe.whitelist()
 def validate_otp_endpoint(submission_id, otp_log_name, otp):
-    """Validate the warehouse-manager OTP and close the collection.
+    """Validate the WM OTP, submit the Cash Submission, close the collection.
 
-    On success, the Cash Submission is marked Verified (the WM has
-    signed off), the linked Driver Collection moves to Closed, and
-    the driver's running daily total can be reset by a downstream
-    Employee.current_day_collected_amount adjustment (handled by the
-    DocType's `on_submit` controller, not here).
+    Per FRD §4.2: the Cash Submission has no Draft state once the OTP
+    is validated. This call:
+      1. Validates the OTP.
+      2. Sets status=Verified.
+      3. Submits the Cash Submission (docstatus=1) — this triggers
+         the DocType's `on_submit` which creates the Internal Transfer
+         Payment Entry.
+      4. Marks the Driver Collection as Closed.
+      5. Zeroes the driver's daily-collected counter so the limit
+         gate releases for the next trip.
     """
     try:
         employee = _require_driver()
@@ -158,11 +163,16 @@ def validate_otp_endpoint(submission_id, otp_log_name, otp):
         validate_otp_v2(log_name=otp_log_name, otp_input=otp)
 
         sub.status = "Verified"
+        sub.submission_date = frappe.utils.today()
         sub.save(ignore_permissions=True)
+        # `.submit()` fires `before_submit` (Verified guard) and
+        # `on_submit` (PE creation, discrepancy ToDo, Collection close).
+        sub.submit()
 
         col = frappe.get_doc("Driver Collection", sub.collection)
-        col.status = "Closed"
-        col.save(ignore_permissions=True)
+        if col.status != "Submitted":
+            col.status = "Closed"
+            col.save(ignore_permissions=True)
 
         # Reset the driver's daily running total — the limit blocks
         # further COD PoDs until a successful handover (FRD §7.2).
@@ -172,11 +182,18 @@ def validate_otp_endpoint(submission_id, otp_log_name, otp):
             emp.save(ignore_permissions=True)
 
         frappe.db.commit()
+
+        # `on_submit` may have created the Payment Entry; re-read to
+        # surface it in the response so Flutter renders the receipt.
+        sub.reload()
+
         return ok(data={
             "submission_id": sub.name,
             "status": "Verified",
             "collection_id": col.name,
             "collection_status": col.status,
+            "payment_entry": sub.get("payment_entry"),
+            "discrepancy_flag": bool(sub.get("discrepancy_flag")),
             "daily_limit_reset": True,
         })
     except OTPInvalidError as e:
