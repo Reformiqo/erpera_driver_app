@@ -77,15 +77,57 @@ def send_delivery_otp(delivery_note, customer_mobile=None):
 
 
 @frappe.whitelist()
-def submit_proof(delivery_note, otp_log_name, otp, proof_image=None, signature=None, latitude=None, longitude=None):
+def submit_proof(
+    delivery_note,
+    otp_log_name,
+    otp,
+    proof_image=None,
+    signature=None,
+    latitude=None,
+    longitude=None,
+    cod_collected_amount=None,
+    payment_method=None,
+):
+    """Atomic delivery confirmation (FRD §6.2.2 / §9.10 example 1).
+
+    Steps performed in one transaction:
+      1. Validate the customer OTP (10-min window, single-use).
+      2. Stamp the DN with proof image, signature, GPS, status=Delivered.
+      3. For COD orders, increment Employee.current_day_collected_amount
+         and roll the cash into today's Driver Collection.
+      4. Return the linked Driver Collection, current daily total, and
+         the driver's daily limit so the Flutter app can render the
+         post-delivery state without an extra round-trip.
+
+    [cod_collected_amount] + [payment_method] are required when the
+    DN's `cowberry_payment_method` starts with "COD". The amount must
+    equal `cod_amount` exactly (FRD §10.3 row 2 — no partial payments
+    in V3); a mismatch returns COD_AMOUNT_MISMATCH.
+    """
     try:
-        _require_driver()
+        employee = _require_driver()
         if not frappe.db.exists("Delivery Note", delivery_note):
             raise DeliveryNoteNotFoundError()
 
         validate_otp_v2(log_name=otp_log_name, otp_input=otp)
 
         dn = frappe.get_doc("Delivery Note", delivery_note)
+        payment_type = dn.get("cowberry_payment_method") or ""
+        is_cod = payment_type.startswith("COD")
+
+        if is_cod:
+            expected = float(dn.get("cod_amount") or dn.grand_total or 0)
+            collected = float(cod_collected_amount or 0)
+            if abs(expected - collected) > 0.01:
+                return err(
+                    "COD_AMOUNT_MISMATCH",
+                    f"Collected amount {collected} does not equal expected {expected}.",
+                )
+            dn.cod_collected_amount = collected
+            dn.cod_collection_timestamp = frappe.utils.now_datetime()
+            if payment_method:
+                dn.cod_payment_method = payment_method
+
         if proof_image:
             dn.cowberry_proof_image = proof_image
         if signature:
@@ -95,12 +137,81 @@ def submit_proof(delivery_note, otp_log_name, otp, proof_image=None, signature=N
             dn.cowberry_delivery_lng = longitude
         dn.cowberry_delivery_status = "Delivered"
         dn.save(ignore_permissions=True)
+
+        driver_collection = None
+        current_day_collected = 0.0
+        daily_limit = 0.0
+        if is_cod:
+            driver_collection = _roll_into_collection(employee, dn)
+            emp = frappe.get_doc("Employee", employee)
+            current = float(emp.get("current_day_collected_amount") or 0)
+            new_total = current + collected
+            emp.current_day_collected_amount = new_total
+            emp.current_day_collected_date = frappe.utils.today()
+            emp.save(ignore_permissions=True)
+            current_day_collected = new_total
+            daily_limit = float(emp.get("daily_collection_limit") or 0)
+
         frappe.db.commit()
-        return ok(data={"message": "Proof submitted.", "delivery_note": dn.name})
+        return ok(data={
+            "delivery_note": dn.name,
+            "delivery_status": "Delivered",
+            "driver_collection": driver_collection,
+            "current_day_collected": current_day_collected,
+            "daily_limit": daily_limit,
+            "message": "Proof submitted.",
+        })
     except (DeliveryNoteNotFoundError, OTPInvalidError) as e:
         return e.to_response()
     except Exception as e:
         return err("SUBMIT_PROOF_FAILED", str(e))
+
+
+def _roll_into_collection(employee, dn):
+    """Append the COD payment onto today's open Driver Collection.
+
+    Creates one if none exists for the day. Updates total_cash /
+    total_online based on the captured payment method. The CCD Order
+    Item child row is appended so the breakdown table on the
+    Collection screen stays in sync.
+    """
+    today = frappe.utils.today()
+    name = frappe.db.get_value(
+        "Driver Collection",
+        {"driver": employee, "collection_date": today, "docstatus": 0},
+        "name",
+    )
+    if name:
+        col = frappe.get_doc("Driver Collection", name)
+    else:
+        col = frappe.new_doc("Driver Collection")
+        col.driver = employee
+        col.collection_date = today
+        col.status = "Open"
+
+    amount = float(dn.get("cod_collected_amount") or 0)
+    method = (dn.get("cod_payment_method") or "Cash").lower()
+    if method.startswith("upi") or method.startswith("online"):
+        col.total_online = float(col.get("total_online") or 0) + amount
+    else:
+        col.total_cash = float(col.get("total_cash") or 0) + amount
+
+    col.append("order_breakdown", {
+        "delivery_note": dn.name,
+        "customer": dn.customer,
+        "customer_name": dn.customer_name,
+        "payment_method": dn.get("cod_payment_method") or "Cash",
+        "cash_amount": amount if not method.startswith(("upi", "online")) else 0,
+        "online_amount": amount if method.startswith(("upi", "online")) else 0,
+        "total_amount": amount,
+        "status": "Delivered",
+    })
+
+    if col.name:
+        col.save(ignore_permissions=True)
+    else:
+        col.insert(ignore_permissions=True)
+    return col.name
 
 
 @frappe.whitelist()
