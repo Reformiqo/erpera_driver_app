@@ -13,18 +13,18 @@ from erpera_driver_app.utils.response import err, ok
 # ---------------------------------------------------------------------------
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
-def login(email=None, password=None):
+def login(user=None, password=None):
     """Driver-app login. Returns the Frappe session id (`sid`) plus the
     authenticated user's profile + linked Employee. Caller is rejected with
     `NOT_DRIVER` if the user lacks the Driver role.
     """
     try:
-        if not email or not isinstance(email, str):
-            return err("MISSING_EMAIL", "Please provide your email address.", 400)
+        if not user or not isinstance(user, str):
+            return err("MISSING_USER", "Please provide your user (email).", 400)
         if not password or not isinstance(password, str):
             return err("MISSING_PASSWORD", "Please provide your password.", 400)
 
-        email = email.strip().lower()
+        email = user.strip().lower()
         user_row = frappe.db.get_value(
             "User", {"name": email}, ["name", "enabled"], as_dict=True
         )
