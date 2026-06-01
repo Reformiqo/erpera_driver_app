@@ -128,3 +128,107 @@ def reschedule(delivery_note, reason, reschedule_date, notes=None):
         return e.to_response()
     except Exception as e:
         return err("RESCHEDULE_FAILED", str(e))
+
+
+@frappe.whitelist()
+def get_history(from_date=None, to_date=None, payment_type=None, limit=50, offset=0):
+    """Past deliveries for the logged-in driver (FRD §6 reports surface).
+
+    Returns delivered orders only — drivers see their own completed work
+    grouped by trip + payment mode. Filtered server-side via the
+    `Delivery Stop`/`Delivery Trip` join because Delivery Note has no
+    direct driver field; permissions on Delivery Trip ensure a driver
+    cannot read another driver's rows.
+
+    Query params:
+        from_date, to_date  ISO YYYY-MM-DD — bounds on posting_date.
+        payment_type        "Prepaid" | "COD-Cash" | "COD-Online" — narrow.
+        limit, offset       Pagination.
+
+    Response data shape:
+        {
+            "entries": [
+                {
+                    "order_id": "DN-...",
+                    "customer_name": "...",
+                    "trip_id": "DT-...",
+                    "delivered_at": "2026-04-24 14:22:11",
+                    "payment_type": "Prepaid" | "COD-Cash" | "COD-Online",
+                    "amount": 1250.00
+                },
+                ...
+            ],
+            "total_count": <int>,
+            "prepaid_count": <int>,
+            "cod_count": <int>,
+            "prepaid_amount": <float>,
+            "cod_amount": <float>,
+        }
+    """
+    try:
+        employee = _require_driver()
+
+        conditions = ["dn.docstatus = 1", "dn.cowberry_delivery_status = 'Delivered'"]
+        params = {"employee": employee}
+
+        if from_date:
+            conditions.append("dn.posting_date >= %(from_date)s")
+            params["from_date"] = from_date
+        if to_date:
+            conditions.append("dn.posting_date <= %(to_date)s")
+            params["to_date"] = to_date
+        if payment_type:
+            conditions.append("dn.cowberry_payment_method = %(payment_type)s")
+            params["payment_type"] = payment_type
+
+        params["limit"] = int(limit)
+        params["offset"] = int(offset)
+
+        where = " AND ".join(conditions)
+        rows = frappe.db.sql(
+            f"""
+            SELECT
+                dn.name             AS order_id,
+                dn.customer_name    AS customer_name,
+                dt.name             AS trip_id,
+                dn.modified AS delivered_at,
+                dn.cowberry_payment_method AS payment_type,
+                dn.grand_total      AS amount
+            FROM `tabDelivery Note` dn
+            JOIN `tabDelivery Stop` ds ON ds.delivery_note = dn.name
+            JOIN `tabDelivery Trip` dt ON ds.parent = dt.name
+            WHERE dt.driver = %(employee)s AND {where}
+            ORDER BY delivered_at DESC
+            LIMIT %(limit)s OFFSET %(offset)s
+            """,
+            params,
+            as_dict=True,
+        )
+
+        prepaid_count = 0
+        cod_count = 0
+        prepaid_amount = 0.0
+        cod_amount = 0.0
+        for row in rows:
+            amount = float(row.get("amount") or 0)
+            if (row.get("payment_type") or "").lower().startswith("prepaid"):
+                prepaid_count += 1
+                prepaid_amount += amount
+            else:
+                cod_count += 1
+                cod_amount += amount
+            # Normalise datetime to ISO string for transport.
+            if row.get("delivered_at") is not None:
+                row["delivered_at"] = str(row["delivered_at"])
+            row["amount"] = amount
+
+        return ok(data={
+            "entries": rows,
+            "total_count": len(rows),
+            "prepaid_count": prepaid_count,
+            "cod_count": cod_count,
+            "prepaid_amount": prepaid_amount,
+            "cod_amount": cod_amount,
+        })
+    except Exception as e:
+        return err("GET_HISTORY_FAILED", str(e))
