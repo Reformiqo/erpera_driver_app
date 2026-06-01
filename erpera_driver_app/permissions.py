@@ -3,7 +3,7 @@ import frappe
 
 def _get_driver_employee():
     """Return the Employee name for the current user if they have the Driver role."""
-    if not frappe.has_role("Driver"):
+    if "Driver" not in frappe.get_roles():
         return None
     return frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name")
 
@@ -25,14 +25,13 @@ def driver_collection_query(user):
 
 
 def wallet_transaction_query(user):
-    """Drivers see only wallet transactions for their linked customer."""
-    employee = _get_driver_employee()
-    if not employee:
-        return ""
-    customer = frappe.db.get_value("Customer", {"cowberry_driver": employee}, "name")
-    if not customer:
+    """Drivers don't browse Wallet Transaction in Desk — the mobile
+    app uses wallet.load `history` with a card_number, which gates by
+    card ownership. Deny the list-view path for drivers; leave other
+    roles unrestricted."""
+    if "Driver" in frappe.get_roles():
         return "1=0"
-    return f"`tabWallet Transaction`.customer = {frappe.db.escape(customer)}"
+    return ""
 
 
 def delivery_attempt_log_query(user):

@@ -1,4 +1,4 @@
 from frappe.model.document import Document
 
-class CowberryOtpLog(Document):
+class OTPLog(Document):
     pass

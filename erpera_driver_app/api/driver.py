@@ -5,7 +5,7 @@ from erpera_driver_app.utils.response import err, ok
 
 
 def _require_driver():
-    if not frappe.has_role("Driver"):
+    if "Driver" not in frappe.get_roles():
         raise NotDriverError()
     employee = frappe.db.get_value("Employee", {"user_id": frappe.session.user}, "name")
     if not employee:
