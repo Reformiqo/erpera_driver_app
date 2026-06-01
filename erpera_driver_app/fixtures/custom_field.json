@@ -1,1 +1,403 @@
-[]
+[
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_driver_section",
+  "fieldtype": "Section Break",
+  "label": "Driver App",
+  "insert_after": "amended_from",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_payment_method",
+  "fieldtype": "Select",
+  "label": "Payment Method",
+  "options": "\nPrepaid\nCOD-Cash\nCOD-Online",
+  "insert_after": "cowberry_driver_section",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_delivery_status",
+  "fieldtype": "Select",
+  "label": "Delivery Status",
+  "options": "\nPending\nOut for Delivery\nDelivered\nFailed\nRescheduled",
+  "default": "Pending",
+  "insert_after": "cowberry_payment_method",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cod_amount",
+  "fieldtype": "Currency",
+  "label": "COD Amount",
+  "description": "Amount the driver must collect. Required when payment_method starts with COD.",
+  "insert_after": "cowberry_delivery_status",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cod_collected_amount",
+  "fieldtype": "Currency",
+  "label": "COD Collected Amount",
+  "insert_after": "cod_amount",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cod_collection_timestamp",
+  "fieldtype": "Datetime",
+  "label": "COD Collection Timestamp",
+  "read_only": 1,
+  "insert_after": "cod_collected_amount",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cod_payment_method",
+  "fieldtype": "Select",
+  "label": "COD Payment Method",
+  "options": "\nCash\nUPI",
+  "insert_after": "cod_collection_timestamp",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "razorpay_payment_status",
+  "fieldtype": "Select",
+  "label": "Razorpay Payment Status",
+  "options": "\nPending\nConfirmed\nFailed",
+  "description": "Set by Razorpay webhook. Gates OTP entry for COD-Online (FRD §6.4).",
+  "insert_after": "cod_payment_method",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "razorpay_order_id",
+  "fieldtype": "Data",
+  "label": "Razorpay Order ID",
+  "insert_after": "razorpay_payment_status",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "razorpay_confirmed_at",
+  "fieldtype": "Datetime",
+  "label": "Razorpay Confirmed At",
+  "read_only": 1,
+  "description": "Set by the Razorpay webhook on payment.captured.",
+  "insert_after": "razorpay_order_id",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "razorpay_payment_entry",
+  "fieldtype": "Link",
+  "label": "Razorpay Payment Entry",
+  "options": "Payment Entry",
+  "read_only": 1,
+  "insert_after": "razorpay_confirmed_at",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "sales_invoice",
+  "fieldtype": "Link",
+  "label": "Sales Invoice",
+  "options": "Sales Invoice",
+  "read_only": 1,
+  "description": "Auto-created on Proof of Delivery (FRD §6.2.2).",
+  "insert_after": "razorpay_payment_entry",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_pod_section",
+  "fieldtype": "Section Break",
+  "label": "Proof of Delivery",
+  "insert_after": "razorpay_order_id",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_proof_image",
+  "fieldtype": "Attach Image",
+  "label": "Proof Image",
+  "insert_after": "cowberry_pod_section",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_signature",
+  "fieldtype": "Long Text",
+  "label": "Customer Signature (Base64)",
+  "insert_after": "cowberry_proof_image",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_delivery_lat",
+  "fieldtype": "Float",
+  "label": "Delivery Latitude",
+  "precision": "7",
+  "insert_after": "cowberry_signature",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_delivery_lng",
+  "fieldtype": "Float",
+  "label": "Delivery Longitude",
+  "precision": "7",
+  "insert_after": "cowberry_delivery_lat",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_delivery_notes",
+  "fieldtype": "Small Text",
+  "label": "Driver Notes",
+  "insert_after": "cowberry_delivery_lng",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Delivery Note",
+  "fieldname": "cowberry_reschedule_date",
+  "fieldtype": "Date",
+  "label": "Reschedule Date",
+  "insert_after": "cowberry_delivery_notes",
+  "module": "Erpera Driver App"
+ },
+
+ {
+  "doctype": "Custom Field",
+  "dt": "Customer",
+  "fieldname": "cowberry_wallet_section",
+  "fieldtype": "Section Break",
+  "label": "Cowberry Wallet",
+  "insert_after": "customer_details",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Customer",
+  "fieldname": "wallet_active",
+  "fieldtype": "Check",
+  "label": "Wallet Active",
+  "default": "0",
+  "insert_after": "cowberry_wallet_section",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Customer",
+  "fieldname": "wallet_card_number",
+  "fieldtype": "Data",
+  "label": "Wallet Card Number",
+  "unique": 1,
+  "insert_after": "wallet_active",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Customer",
+  "fieldname": "wallet_balance",
+  "fieldtype": "Currency",
+  "label": "Wallet Balance",
+  "read_only": 1,
+  "description": "Denormalised running total. Updated only via submitted Wallet Transactions.",
+  "insert_after": "wallet_card_number",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Customer",
+  "fieldname": "wallet_min_topup",
+  "fieldtype": "Currency",
+  "label": "Wallet Min Top-up",
+  "default": "100",
+  "insert_after": "wallet_balance",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Customer",
+  "fieldname": "wallet_max_topup",
+  "fieldtype": "Currency",
+  "label": "Wallet Max Top-up",
+  "default": "10000",
+  "insert_after": "wallet_min_topup",
+  "module": "Erpera Driver App"
+ },
+
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "cowberry_driver_section",
+  "fieldtype": "Section Break",
+  "label": "Driver App",
+  "insert_after": "personal_email",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "daily_collection_limit",
+  "fieldtype": "Currency",
+  "label": "Daily Collection Limit",
+  "default": "50000",
+  "insert_after": "cowberry_driver_section",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "current_day_collected_amount",
+  "fieldtype": "Currency",
+  "label": "Current Day Collected",
+  "read_only": 1,
+  "default": "0",
+  "insert_after": "daily_collection_limit",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "current_day_collected_date",
+  "fieldtype": "Date",
+  "label": "Current Day Date",
+  "read_only": 1,
+  "insert_after": "current_day_collected_amount",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "default_warehouse",
+  "fieldtype": "Link",
+  "label": "Default Warehouse",
+  "options": "Warehouse",
+  "insert_after": "current_day_collected_date",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "vehicle_assigned",
+  "fieldtype": "Data",
+  "label": "Vehicle Assigned",
+  "insert_after": "default_warehouse",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "fcm_device_token",
+  "fieldtype": "Small Text",
+  "label": "FCM Device Token",
+  "description": "Refreshed on every cold start. Used for push notifications + concurrent-login guard.",
+  "insert_after": "vehicle_assigned",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "app_version",
+  "fieldtype": "Data",
+  "label": "App Version",
+  "insert_after": "fcm_device_token",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "last_login_at",
+  "fieldtype": "Datetime",
+  "label": "Last Login At",
+  "read_only": 1,
+  "insert_after": "app_version",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Employee",
+  "fieldname": "offline_zone_radius_km",
+  "fieldtype": "Int",
+  "label": "Offline Zone Radius (km)",
+  "default": "30",
+  "insert_after": "last_login_at",
+  "module": "Erpera Driver App"
+ },
+
+ {
+  "doctype": "Custom Field",
+  "dt": "Warehouse",
+  "fieldname": "cowberry_driver_section",
+  "fieldtype": "Section Break",
+  "label": "Driver App",
+  "insert_after": "warehouse_type",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Warehouse",
+  "fieldname": "warehouse_manager",
+  "fieldtype": "Link",
+  "label": "Warehouse Manager",
+  "options": "Employee",
+  "insert_after": "cowberry_driver_section",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Warehouse",
+  "fieldname": "warehouse_manager_email",
+  "fieldtype": "Data",
+  "label": "Warehouse Manager Email",
+  "options": "Email",
+  "description": "Recipient for cash-handover OTP (FRD §3.7).",
+  "insert_after": "warehouse_manager",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Warehouse",
+  "fieldname": "warehouse_manager_mobile",
+  "fieldtype": "Data",
+  "options": "Phone",
+  "label": "Warehouse Manager Mobile",
+  "description": "Fallback channel for cash-handover OTP if email is down.",
+  "insert_after": "warehouse_manager_email",
+  "module": "Erpera Driver App"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Warehouse",
+  "fieldname": "warehouse_cash_account",
+  "fieldtype": "Link",
+  "label": "Warehouse Cash Account",
+  "options": "Account",
+  "description": "paid_to account for Cash Submission Internal-Transfer Payment Entries (FRD §4.2).",
+  "insert_after": "warehouse_manager_mobile",
+  "module": "Erpera Driver App"
+ }
+]
