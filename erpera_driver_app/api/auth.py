@@ -1,9 +1,28 @@
 import frappe
+import frappe.auth  # noqa: F401  -- LoginManager lives here
 
 from erpera_driver_app import __version__
 from erpera_driver_app.utils.exceptions import OTPInvalidError
 from erpera_driver_app.utils.otp import PURPOSE_DRIVER_LOGIN, dispatch_otp_v2, validate_otp_v2
 from erpera_driver_app.utils.response import err, ok
+
+
+def _issue_api_credentials(user_id):
+    """Return (api_key, api_secret) for the user. api_key is created once
+    and persists across logins; api_secret is freshly rotated on every login
+    so a fresh device login invalidates the previous token. The Flutter
+    client sends both together as `Authorization: token <key>:<secret>` on
+    every subsequent request.
+    """
+    user_doc = frappe.get_doc("User", user_id)
+    if not user_doc.api_key:
+        user_doc.api_key = frappe.generate_hash(length=15)
+    api_secret = frappe.generate_hash(length=15)
+    user_doc.api_secret = api_secret
+    user_doc.flags.ignore_permissions = True
+    user_doc.save()
+    frappe.db.commit()
+    return user_doc.api_key, api_secret
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +94,7 @@ def login(user=None, password=None):
             )
 
         user_doc = frappe.get_doc("User", email)
+        api_key, api_secret = _issue_api_credentials(email)
         return ok(data={
             "user":       email,
             "full_name":  user_doc.full_name,
@@ -83,7 +103,11 @@ def login(user=None, password=None):
             "user_image": user_doc.user_image or employee.image,
             "employee":   employee,
             "roles":      roles,
-            "sid":        frappe.session.sid,
+            # Token credentials — Flutter client sends them as
+            #   Authorization: token <api_key>:<api_secret>
+            # on every subsequent call. api_secret rotates per login.
+            "api_key":    api_key,
+            "api_secret": api_secret,
         })
     except Exception as e:
         return err("LOGIN_FAILED", str(e), 500)
