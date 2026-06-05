@@ -76,38 +76,29 @@ def login(user=None, password=None):
                 403,
             )
 
-        employee = frappe.db.get_value(
-            "Employee",
-            {"user_id": email},
-            [
-                "name", "employee_name", "cell_number", "image",
-                "department", "designation", "branch",
-            ],
-            as_dict=True,
-        )
-        if not employee:
+        emp_name = frappe.db.get_value("Employee", {"user_id": email}, "name")
+        if not emp_name:
             frappe.local.login_manager.logout()
             return err(
                 "NO_EMPLOYEE",
                 "No Employee record is linked to this user. Please contact your administrator.",
                 403,
             )
-
-        user_doc = frappe.get_doc("User", email)
+        emp = frappe.get_doc("Employee", emp_name)
         api_key, api_secret = _issue_api_credentials(email)
+        # Flat one-round-trip response per the FRD spec: Flutter calls
+        # login on cold start and has everything the home screen needs
+        # (token + driver profile) without a follow-up driver.get_profile.
         return ok(data={
-            "user":       email,
-            "full_name":  user_doc.full_name,
-            "email":      user_doc.email,
-            "mobile_no":  user_doc.mobile_no or employee.cell_number,
-            "user_image": user_doc.user_image or employee.image,
-            "employee":   employee,
-            "roles":      roles,
-            # Token credentials — Flutter client sends them as
-            #   Authorization: token <api_key>:<api_secret>
-            # on every subsequent call. api_secret rotates per login.
-            "api_key":    api_key,
-            "api_secret": api_secret,
+            "api_key":                api_key,
+            "api_secret":             api_secret,
+            "employee":               emp.name,
+            "employee_name":          emp.employee_name,
+            "default_warehouse":      emp.get("default_warehouse"),
+            "daily_collection_limit": emp.get("daily_collection_limit"),
+            "vehicle_assigned":       emp.get("vehicle_assigned"),
+            "offline_zone_radius_km": emp.get("offline_zone_radius_km"),
+            "roles":                  roles,
         })
     except Exception as e:
         return err("LOGIN_FAILED", str(e), 500)
@@ -128,21 +119,19 @@ def get_user_info():
         if "Driver" not in roles:
             return err("NOT_DRIVER", "This account does not have driver access.", 403)
 
-        employee = frappe.db.get_value(
-            "Employee", {"user_id": email},
-            ["name", "employee_name", "cell_number", "image",
-             "department", "designation", "branch"],
-            as_dict=True,
-        )
-        user_doc = frappe.get_doc("User", email)
+        emp_name = frappe.db.get_value("Employee", {"user_id": email}, "name")
+        if not emp_name:
+            return err("NO_EMPLOYEE", "No Employee record is linked to this user.", 403)
+        emp = frappe.get_doc("Employee", emp_name)
+        # Same flat shape as login, minus the token (client already has it).
         return ok(data={
-            "user":       email,
-            "full_name":  user_doc.full_name,
-            "email":      user_doc.email,
-            "mobile_no":  user_doc.mobile_no or (employee.cell_number if employee else None),
-            "user_image": user_doc.user_image or (employee.image if employee else None),
-            "employee":   employee,
-            "roles":      roles,
+            "employee":               emp.name,
+            "employee_name":          emp.employee_name,
+            "default_warehouse":      emp.get("default_warehouse"),
+            "daily_collection_limit": emp.get("daily_collection_limit"),
+            "vehicle_assigned":       emp.get("vehicle_assigned"),
+            "offline_zone_radius_km": emp.get("offline_zone_radius_km"),
+            "roles":                  roles,
         })
     except Exception as e:
         return err("GET_USER_INFO_FAILED", str(e), 500)
