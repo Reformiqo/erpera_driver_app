@@ -11,6 +11,9 @@ description = "Erpera Driver App ERP"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.0.1"
+dependencies = [
+    "setuptools",
+]
 
 [project.urls]
 Homepage = "https://github.com/reformiqo/cowberry_driver_app_erp"
