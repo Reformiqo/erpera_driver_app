@@ -27,7 +27,7 @@
   "fieldname": "cowberry_delivery_status",
   "fieldtype": "Select",
   "label": "Delivery Status",
-  "options": "\nPending\nOut for Delivery\nDelivered\nFailed\nRescheduled",
+  "options": "\nPending\nOut for Pickup\nPicked Up\nOut for Delivery\nAt Location\nDelivered\nAttempted\nRescheduled\nFailed\nCancelled",
   "default": "Pending",
   "insert_after": "cowberry_payment_method",
   "module": "Erpera Driver App",

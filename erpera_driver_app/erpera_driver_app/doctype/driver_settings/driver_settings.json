@@ -15,7 +15,9 @@
   "razorpay_key_secret",
   "razorpay_webhook_secret",
   "fcm_section",
-  "fcm_server_key"
+  "fcm_server_key",
+  "delivery_section",
+  "max_reschedules"
  ],
  "fields": [
   {"fieldname": "otp_section", "fieldtype": "Section Break", "label": "OTP Settings"},
@@ -29,7 +31,9 @@
   {"fieldname": "razorpay_key_secret", "fieldtype": "Password", "label": "Razorpay Key Secret"},
   {"fieldname": "razorpay_webhook_secret", "fieldtype": "Password", "label": "Razorpay Webhook Secret"},
   {"fieldname": "fcm_section", "fieldtype": "Section Break", "label": "Push Notifications"},
-  {"fieldname": "fcm_server_key", "fieldtype": "Password", "label": "FCM Server Key"}
+  {"fieldname": "fcm_server_key", "fieldtype": "Password", "label": "FCM Server Key"},
+  {"fieldname": "delivery_section", "fieldtype": "Section Break", "label": "Delivery Workflow"},
+  {"fieldname": "max_reschedules", "fieldtype": "Int", "label": "Max Reschedules per Delivery", "default": "3", "description": "How many times a single Delivery Note may be rescheduled before delivery.reschedule rejects with RESCHEDULE_LIMIT_EXCEEDED."}
  ],
  "issingle": 1,
  "links": [],

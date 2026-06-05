@@ -16,7 +16,7 @@
   {"fieldname": "naming_series", "fieldtype": "Select", "label": "Series", "options": "RSL-.YYYY.-.####"},
   {"fieldname": "delivery_note", "fieldtype": "Link", "label": "Delivery Note", "options": "Delivery Note", "reqd": 1},
   {"fieldname": "driver", "fieldtype": "Link", "label": "Driver", "options": "Employee", "reqd": 1},
-  {"fieldname": "reason", "fieldtype": "Select", "label": "Reason", "options": "Customer Not Available\nAddress Not Found\nVehicle Breakdown\nWeather Conditions\nOther", "reqd": 1},
+  {"fieldname": "reason", "fieldtype": "Select", "label": "Reason", "options": "Customer Absent\nCustomer Not Available\nAddress Not Found\nVehicle Breakdown\nWeather Conditions\nOther", "reqd": 1},
   {"fieldname": "reschedule_date", "fieldtype": "Date", "label": "Reschedule Date", "reqd": 1},
   {"fieldname": "notes", "fieldtype": "Small Text", "label": "Notes"}
  ],
