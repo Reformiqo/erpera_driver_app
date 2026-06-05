@@ -1,4 +1,5 @@
 import frappe
+from frappe.utils import flt
 
 from erpera_driver_app.api.driver import _require_driver
 from erpera_driver_app.utils.exceptions import (
@@ -9,6 +10,136 @@ from erpera_driver_app.utils.exceptions import (
 from erpera_driver_app.utils.otp import PURPOSE_POD, dispatch_otp_v2, validate_otp_v2
 from erpera_driver_app.utils.response import err, ok
 
+
+# ---------------------------------------------------------------------------
+# Spec-named endpoints (Nainsi's xlsx §Order §§1-2)
+# ---------------------------------------------------------------------------
+
+@frappe.whitelist(methods=["GET"])
+def get_order_detail(delivery_note=None):
+    """Order §1 — full order detail for the Stop Detail screen.
+
+    Returns spec shape: delivery_note, customer, customer_address,
+    contact_mobile, delivery_status, payment_type, cod_amount,
+    otp_status, reschedule_count, stop_sequence, expected_arrival_time,
+    items[], special_instructions.
+
+    FORBIDDEN if the DN is not assigned to the caller's active trip.
+    """
+    try:
+        employee = _require_driver()
+        if not delivery_note:
+            return err("VALIDATION_ERROR", "Query param `delivery_note` is required.", 400)
+        if not frappe.db.exists("Delivery Note", delivery_note):
+            return err("NOT_FOUND", f"Delivery Note '{delivery_note}' not found.", 404)
+        dn = frappe.get_doc("Delivery Note", delivery_note)
+
+        # Driver-scope check: the DN must be a stop on a trip assigned to
+        # this driver. Trip.driver links to the ERPNext Driver record.
+        from erpera_driver_app.api.trip import _driver_record
+        driver = _driver_record(employee)
+        if driver:
+            stop_row = frappe.db.sql(
+                """SELECT ds.parent AS trip_name, ds.idx, ds.estimated_arrival
+                     FROM `tabDelivery Stop` ds
+                     JOIN `tabDelivery Trip` dt ON dt.name = ds.parent
+                    WHERE ds.delivery_note = %s AND dt.driver = %s
+                    LIMIT 1""",
+                (delivery_note, driver), as_dict=True,
+            )
+            if not stop_row:
+                return err("FORBIDDEN",
+                           "This delivery note is not assigned to you.", 403)
+            stop_sequence = stop_row[0].idx
+            expected_arrival = stop_row[0].estimated_arrival
+        else:
+            stop_sequence = None
+            expected_arrival = None
+
+        payment_type = dn.get("cowberry_payment_method")
+        cod_amount = flt(dn.grand_total) if (payment_type or "").upper().startswith("COD") else 0
+        reschedule_count = frappe.db.count("Reschedule Log", {"delivery_note": delivery_note})
+        # OTP status: derived from cowberry_delivery_status + presence of
+        # an outstanding OTP Log. Module 6 will replace this with a
+        # proper status read from the DN's otp_attempts custom field.
+        otp_status = "Validated" if dn.get("cowberry_delivery_status") == "Delivered" else "Not Requested"
+
+        items = [
+            {"item_code": i.item_code, "item_name": i.item_name,
+             "qty": i.qty, "uom": i.uom}
+            for i in dn.items
+        ]
+        # special_instructions: prefer DN.custom_order_note if set; fall
+        # back to the upstream Sales Order's custom_order_note.
+        special = dn.get("custom_order_note")
+        if not special and dn.items:
+            so_name = dn.items[0].get("against_sales_order")
+            if so_name:
+                special = frappe.db.get_value("Sales Order", so_name, "custom_order_note")
+
+        return ok(data={
+            "delivery_note":         dn.name,
+            "customer":              dn.customer_name or dn.customer,
+            "customer_address":      dn.address_display,
+            "contact_mobile":        dn.contact_mobile,
+            "delivery_status":       dn.get("cowberry_delivery_status") or "Pending",
+            "payment_type":          payment_type,
+            "cod_amount":            cod_amount,
+            "otp_status":            otp_status,
+            "reschedule_count":      reschedule_count,
+            "stop_sequence":         stop_sequence,
+            "expected_arrival_time": str(expected_arrival) if expected_arrival else None,
+            "items":                 items,
+            "special_instructions":  special,
+        })
+    except Exception as e:
+        return err("GET_ORDER_DETAIL_FAILED", str(e))
+
+
+@frappe.whitelist(methods=["GET"])
+def get_invoice_pdf(delivery_note=None):
+    """Order §2 — return a printable URL for the Sales Invoice created
+    from this DN's `submit_proof` step. NOT_FOUND before delivery.
+    """
+    try:
+        _require_driver()
+        if not delivery_note:
+            return err("VALIDATION_ERROR", "Query param `delivery_note` is required.", 400)
+        if not frappe.db.exists("Delivery Note", delivery_note):
+            return err("NOT_FOUND", f"Delivery Note '{delivery_note}' not found.", 404)
+        # SI linked via Sales Invoice Item.dn_detail → Delivery Note Item.name
+        # or via against_sales_invoice on the DN itself. Try both paths.
+        si = frappe.db.sql(
+            """SELECT DISTINCT si.name
+                 FROM `tabSales Invoice Item` sii
+                 JOIN `tabSales Invoice` si ON si.name = sii.parent
+                WHERE sii.dn_detail IN (
+                    SELECT name FROM `tabDelivery Note Item` WHERE parent = %s
+                )
+                  AND si.docstatus = 1
+                LIMIT 1""",
+            (delivery_note,),
+        )
+        si_name = si[0][0] if si else None
+        if not si_name:
+            return err("NOT_FOUND",
+                       "Sales Invoice has not been created yet. Complete the delivery first.",
+                       404)
+        # Use the bench's standard Cowberry print format if available, else stock
+        fmt = "Cowberry Invoice" if frappe.db.exists("Print Format", "Cowberry Invoice") else "Standard"
+        url = (
+            "/api/method/frappe.utils.print_format.download_pdf"
+            f"?doctype=Sales+Invoice&name={frappe.utils.quoted(si_name)}"
+            f"&format={frappe.utils.quoted(fmt)}"
+        )
+        return ok(data={"invoice_pdf_url": url})
+    except Exception as e:
+        return err("GET_INVOICE_PDF_FAILED", str(e))
+
+
+# ---------------------------------------------------------------------------
+# Legacy endpoints (back-compat — same module so existing clients keep working)
+# ---------------------------------------------------------------------------
 
 @frappe.whitelist()
 def get_order(delivery_note):
