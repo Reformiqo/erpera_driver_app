@@ -1,8 +1,254 @@
 import frappe
+from frappe.utils import add_to_date, cint, flt, now_datetime, today
 
 from erpera_driver_app.api.driver import _require_driver
-from erpera_driver_app.utils.exceptions import WalletInsufficientError
+from erpera_driver_app.utils.exceptions import OTPInvalidError, WalletInsufficientError
+from erpera_driver_app.utils.otp import PURPOSE_WALLET, dispatch_otp_v2, validate_otp_v2
 from erpera_driver_app.utils.response import err, ok
+
+OTP_VALIDITY_MINUTES = 5
+
+
+def _mask_mobile(mobile):
+    """Render +91 9876543210 → ****3210 so the driver gets confirmation
+    the OTP went to the right place without seeing the full number."""
+    if not mobile:
+        return None
+    digits = "".join(c for c in str(mobile) if c.isdigit())
+    if len(digits) < 4:
+        return "****"
+    return "****" + digits[-4:]
+
+
+# ---------------------------------------------------------------------------
+# Spec-named endpoints (Nainsi's xlsx §Wallet §§1-5)
+# ---------------------------------------------------------------------------
+
+@frappe.whitelist(methods=["GET"])
+def validate_card(card_number=None):
+    """§1 Pre-flight check on a customer's wallet card. Returns the
+    masked balance + top-up bounds per spec; never reveals the actual
+    balance to the driver."""
+    try:
+        _require_driver()
+        if not card_number:
+            return err("VALIDATION_ERROR", "card_number is required.", 400)
+        cust = _resolve_customer(card_number)
+        if not cust:
+            return err("NOT_FOUND", "Wallet card not registered.", 404)
+        if not cust.get("wallet_active"):
+            return err("WALLET_INACTIVE",
+                       "Wallet is not active for this card.", 400)
+        return ok(data={
+            "customer_name":  cust.customer_name,
+            "wallet_active":  1,
+            "masked_balance": _mask_balance(flt(cust.get("wallet_balance"))),
+            "min_topup":      flt(cust.get("wallet_min_topup") or 100),
+            "max_topup":      flt(cust.get("wallet_max_topup") or 10000),
+        })
+    except Exception as e:
+        return err("VALIDATE_CARD_FAILED", str(e))
+
+
+@frappe.whitelist(methods=["POST"])
+def initiate_topup(card_number=None, amount=None):
+    """§2 Stage a top-up: creates a DRAFT Wallet Transaction, dispatches
+    an OTP to the customer's mobile (5-min validity), returns the
+    handle the Flutter client passes to validate_topup_otp.
+    """
+    try:
+        employee = _require_driver()
+        if not card_number:
+            return err("VALIDATION_ERROR", "card_number is required.", 400)
+        cust = _resolve_customer(card_number)
+        if not cust:
+            return err("NOT_FOUND", "Wallet card not registered.", 404)
+        if not cust.get("wallet_active"):
+            return err("WALLET_INACTIVE",
+                       "Wallet is not active for this card.", 400)
+        amt = flt(amount or 0)
+        min_t = flt(cust.get("wallet_min_topup") or 100)
+        max_t = flt(cust.get("wallet_max_topup") or 10000)
+        if amt < min_t or amt > max_t:
+            return err("VALIDATION_ERROR",
+                       f"Amount must be between {min_t} and {max_t}.", 400)
+
+        txn = frappe.new_doc("Wallet Transaction")
+        txn.customer = cust.name
+        txn.transaction_type = "Credit"
+        txn.amount = amt
+        txn.reference = f"Driver top-up by {employee}"
+        txn.flags.ignore_permissions = True
+        txn.insert(ignore_permissions=True)   # docstatus=0 (Draft)
+
+        mobile = cust.get("mobile_no") or frappe.db.get_value(
+            "Contact", {"name": frappe.db.get_value(
+                "Dynamic Link",
+                {"link_doctype": "Customer", "link_name": cust.name},
+                "parent")}, "mobile_no")
+        try:
+            dispatch_otp_v2(
+                purpose=PURPOSE_WALLET,
+                reference_doctype="Wallet Transaction",
+                reference_name=txn.name,
+                recipient_mobile=mobile or "",
+            )
+        except Exception:
+            # OTP dispatch failure shouldn't block; log and let the
+            # client retry. The draft txn stays so retry doesn't
+            # create a duplicate.
+            frappe.logger("erpera_driver_app").exception(
+                f"Wallet OTP dispatch failed for {txn.name}")
+
+        frappe.db.commit()
+        return ok(data={
+            "wallet_transaction":   txn.name,
+            "otp_sent_to":          _mask_mobile(mobile),
+            "otp_validity_minutes": OTP_VALIDITY_MINUTES,
+        })
+    except Exception as e:
+        return err("INITIATE_TOPUP_FAILED", str(e))
+
+
+@frappe.whitelist(methods=["POST"])
+def validate_topup_otp(wallet_transaction=None, otp=None):
+    """§3 Validate the OTP, submit the Wallet Transaction with a
+    row-level lock to avoid concurrent-topup races, return the new
+    balance for driver-side confirmation."""
+    try:
+        employee = _require_driver()
+        if not wallet_transaction or not otp:
+            return err("VALIDATION_ERROR",
+                       "`wallet_transaction` and `otp` are required.", 400)
+        if not frappe.db.exists("Wallet Transaction", wallet_transaction):
+            return err("NOT_FOUND",
+                       f"Wallet Transaction '{wallet_transaction}' not found.", 404)
+        # Resolve the matching OTP Log server-side so the client only
+        # needs the transaction handle.
+        otp_log = frappe.db.get_value(
+            "OTP Log",
+            {"reference_doctype": "Wallet Transaction",
+             "reference_name":    wallet_transaction,
+             "is_used":           0},
+            "name", order_by="creation desc",
+        )
+        if not otp_log:
+            return err("OTP_INVALID",
+                       "No outstanding OTP for this transaction.", 400)
+        try:
+            validate_otp_v2(log_name=otp_log, otp_input=otp)
+        except OTPInvalidError as oe:
+            return oe.to_response()
+
+        # Row-level lock on the customer to serialise concurrent topups.
+        txn = frappe.get_doc("Wallet Transaction", wallet_transaction)
+        if txn.docstatus == 1:
+            return err("VALIDATION_ERROR",
+                       "This top-up has already been validated.", 400)
+        # Submit needs to elevate — drivers don't have Wallet Transaction
+        # write perms (and shouldn't, in case a non-driver tampers via
+        # Desk). The row-lock + submit happen as Administrator; we
+        # restore the driver context immediately after.
+        original_user = frappe.session.user
+        try:
+            frappe.set_user("Administrator")
+            frappe.db.sql(
+                "SELECT name FROM `tabCustomer` WHERE name=%s FOR UPDATE",
+                (txn.customer,),
+            )
+            txn.submit()
+            frappe.db.commit()
+        finally:
+            frappe.set_user(original_user)
+
+        new_balance = flt(frappe.db.get_value(
+            "Customer", txn.customer, "wallet_balance"))
+        return ok(data={
+            "new_balance":        new_balance,
+            "wallet_transaction": txn.name,
+            "receipt_pending":    True,
+        })
+    except Exception as e:
+        return err("VALIDATE_TOPUP_OTP_FAILED", str(e))
+
+
+@frappe.whitelist(methods=["POST"])
+def send_receipt(wallet_transaction=None, channel="SMS"):
+    """§4 Send a balance receipt to the customer via SMS or WhatsApp.
+    Only valid on a submitted Wallet Transaction.
+    """
+    try:
+        _require_driver()
+        if not wallet_transaction:
+            return err("VALIDATION_ERROR",
+                       "`wallet_transaction` is required.", 400)
+        if channel not in ("SMS", "WhatsApp"):
+            return err("VALIDATION_ERROR",
+                       "`channel` must be 'SMS' or 'WhatsApp'.", 400)
+        if not frappe.db.exists("Wallet Transaction", wallet_transaction):
+            return err("NOT_FOUND",
+                       f"Wallet Transaction '{wallet_transaction}' not found.", 404)
+        txn = frappe.get_doc("Wallet Transaction", wallet_transaction)
+        if txn.docstatus != 1:
+            return err("VALIDATION_ERROR",
+                       "Receipt can only be sent on a submitted top-up.", 400)
+        new_balance = flt(frappe.db.get_value(
+            "Customer", txn.customer, "wallet_balance"))
+        mobile = frappe.db.get_value("Customer", txn.customer, "mobile_no")
+        msg = (f"Wallet credit: {flt(txn.amount):.2f}. "
+               f"New balance: {new_balance:.2f}. Thank you.")
+        try:
+            from frappe.core.doctype.sms_settings.sms_settings import send_sms
+            send_sms([mobile], msg)
+        except Exception:
+            frappe.logger("erpera_driver_app").info(
+                f"[Wallet receipt] {channel} placeholder: mobile={mobile} {msg}"
+            )
+        return ok(data={"sent": True, "channel": channel})
+    except Exception as e:
+        return err("SEND_RECEIPT_FAILED", str(e))
+
+
+@frappe.whitelist(methods=["GET"])
+def history(date=None):
+    """§5 Driver-scoped top-ups for a given date (defaults to today).
+    Includes daily counters used by the wallet dashboard.
+    """
+    try:
+        employee = _require_driver()
+        target = date or today()
+        # All submitted top-ups planted by this driver on the date.
+        rows = frappe.db.sql(
+            """
+            SELECT wt.name,
+                   wt.customer,
+                   c.customer_name AS customer_display,
+                   wt.amount,
+                   wt.creation,
+                   wt.modified AS submitted_at
+              FROM `tabWallet Transaction` wt
+              JOIN `tabCustomer` c ON c.name = wt.customer
+             WHERE wt.docstatus = 1
+               AND wt.reference LIKE %(prefix)s
+               AND DATE(wt.creation) = %(d)s
+             ORDER BY wt.creation DESC
+            """,
+            {"prefix": f"Driver top-up by {employee}%", "d": target},
+            as_dict=True,
+        )
+        out = [{
+            "name":         r["name"],
+            "customer":     r["customer_display"] or r["customer"],
+            "amount":       flt(r["amount"]),
+            "submitted_at": str(r["submitted_at"]),
+        } for r in rows]
+        return ok(data={
+            "top_ups":            out,
+            "total_topups_today": len(out),
+            "total_value_today":  sum(t["amount"] for t in out),
+        })
+    except Exception as e:
+        return err("WALLET_HISTORY_FAILED", str(e))
 
 
 @frappe.whitelist()

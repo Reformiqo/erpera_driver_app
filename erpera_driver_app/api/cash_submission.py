@@ -61,7 +61,7 @@ def validate_otp(cash_submission=None, otp=None, submission_id=None,
                 {
                     "reference_doctype": "Cash Submission",
                     "reference_name":    sub_name,
-                    "validated":         0,
+                    "is_used":           0,
                 },
                 "name",
                 order_by="creation desc",
