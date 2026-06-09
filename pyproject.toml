@@ -12,7 +12,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 version = "0.0.1"
 dependencies = [
-    "setuptools",
+    # setuptools 81 removed pkg_resources, which Frappe's bundled dropbox
+    # dep still imports at module load time. Pinning <81 keeps an older
+    # setuptools (with pkg_resources) on the bench's venv so bench migrate
+    # doesn't crash at "Updating DocTypes for frappe".
+    "setuptools<81",
 ]
 
 [project.urls]
