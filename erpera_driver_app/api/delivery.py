@@ -81,6 +81,20 @@ def _do_update_status(delivery_note, target_status, gps_lat=None, gps_lng=None,
 
     dn = frappe.get_doc("Delivery Note", delivery_note)
     current = dn.get("cowberry_delivery_status") or "Pending"
+
+    # Idempotent: if the DN is already in the target state, return success
+    # rather than erroring. The Flutter client can safely re-press the
+    # "Start Pickup" / "Confirm Pickup" buttons (e.g. on retry after a
+    # network blip) without seeing INVALID_TRANSITION (CD2-I5 point 4).
+    if current == target_status:
+        return ok(data={
+            "delivery_note":        dn.name,
+            "delivery_status":      target_status,
+            "actual_arrival_time":  None,
+            "travel_variance_mins": None,
+            "already_in_state":     True,
+        })
+
     if current in TERMINAL_STATUSES:
         return err("INVALID_TRANSITION",
                    f"Cannot transition from terminal status '{current}'.", 400)

@@ -56,40 +56,99 @@ def get_order_detail(delivery_note=None):
             stop_sequence = None
             expected_arrival = None
 
-        payment_type = dn.get("cowberry_payment_method")
-        cod_amount = flt(dn.grand_total) if (payment_type or "").upper().startswith("COD") else 0
+        # CD2-I5 Point 3: payment_type via shared helper (cowberry_payment_method
+        # may be empty/missing — fall through to delhivery_payment_mode → Prepaid).
+        from erpera_driver_app.api.trip import (
+            _resolve_payment_type, _resolve_expected_arrival, _warehouse_info, _order_stage,
+        )
+        payment_type = _resolve_payment_type(delivery_note)
+        cod_amount = flt(dn.grand_total) if payment_type == "COD" else 0
+
+        # CD2-I5 Point 3: ETA fallback when stop estimated_arrival is null —
+        # derive from the parent trip's departure + stop sequence.
+        trip_departure = None
+        if driver and stop_row:
+            trip_departure = frappe.db.get_value(
+                "Delivery Trip", stop_row[0].trip_name, "departure_time")
+        eta_resolved = _resolve_expected_arrival(expected_arrival, trip_departure, stop_sequence)
+
         reschedule_count = frappe.db.count("Reschedule Log", {"delivery_note": delivery_note})
-        # OTP status: derived from cowberry_delivery_status + presence of
-        # an outstanding OTP Log. Module 6 will replace this with a
-        # proper status read from the DN's otp_attempts custom field.
-        otp_status = "Validated" if dn.get("cowberry_delivery_status") == "Delivered" else "Not Requested"
+        delivery_status = dn.get("cowberry_delivery_status") or "Pending"
+        otp_status = "Validated" if delivery_status == "Delivered" else "Not Requested"
 
         items = [
-            {"item_code": i.item_code, "item_name": i.item_name,
-             "qty": i.qty, "uom": i.uom}
+            {"item_code":  i.item_code,
+             "item_name":  i.item_name,
+             "qty":        flt(i.qty),
+             "uom":        i.uom,
+             "rate":       flt(i.rate),
+             "amount":     flt(i.amount)}
             for i in dn.items
         ]
-        # special_instructions: prefer DN.custom_order_note if set; fall
-        # back to the upstream Sales Order's custom_order_note.
-        special = dn.get("custom_order_note")
-        if not special and dn.items:
+
+        # CD2-I5 Point 3: pull linked Sales Order details when available.
+        # DNs are usually created from a SO; the SO holds the original
+        # customer instructions, delivery date, etc.
+        sales_order = None
+        so_name = None
+        if dn.items:
             so_name = dn.items[0].get("against_sales_order")
-            if so_name:
-                special = frappe.db.get_value("Sales Order", so_name, "custom_order_note")
+        if so_name:
+            so = frappe.db.get_value(
+                "Sales Order", so_name,
+                ["name", "transaction_date", "delivery_date",
+                 "total_qty", "grand_total", "status", "po_no",
+                 "customer_address"],
+                as_dict=True,
+            ) or {}
+            sales_order = {
+                "name":             so.get("name"),
+                "transaction_date": str(so.get("transaction_date")) if so.get("transaction_date") else None,
+                "delivery_date":    str(so.get("delivery_date")) if so.get("delivery_date") else None,
+                "po_no":            so.get("po_no"),
+                "status":           so.get("status"),
+                "total_qty":        flt(so.get("total_qty")),
+                "grand_total":      flt(so.get("grand_total")),
+            }
+
+        # special_instructions: prefer DN.custom_order_note → SO.custom_order_note
+        special = dn.get("custom_order_note")
+        if not special and so_name:
+            special = frappe.db.get_value("Sales Order", so_name, "custom_order_note")
+
+        # CD2-I5 Point 3: full payment summary (subtotal, tax, discounts, grand total,
+        # method). Powers the receipt-style summary at the bottom of the order screen.
+        payment_summary = {
+            "subtotal":     flt(dn.net_total),
+            "total_taxes":  flt(dn.total_taxes_and_charges),
+            "discount":     flt(dn.discount_amount),
+            "shipping":     0,   # no built-in shipping field; placeholder
+            "grand_total":  flt(dn.grand_total),
+            "payment_method": payment_type,
+            "currency":     dn.currency or "INR",
+        }
 
         return ok(data={
             "delivery_note":         dn.name,
             "customer":              dn.customer_name or dn.customer,
             "customer_address":      dn.address_display,
             "contact_mobile":        dn.contact_mobile,
-            "delivery_status":       dn.get("cowberry_delivery_status") or "Pending",
+            "delivery_status":       delivery_status,
+            # CD2-I5 Point 3: human-friendly order stage label
+            "order_stage":           _order_stage(delivery_status),
             "payment_type":          payment_type,
             "cod_amount":            cod_amount,
             "otp_status":            otp_status,
             "reschedule_count":      reschedule_count,
             "stop_sequence":         stop_sequence,
-            "expected_arrival_time": str(expected_arrival) if expected_arrival else None,
+            "expected_arrival_time": str(eta_resolved) if eta_resolved else None,
+            # CD2-I5 Point 3: warehouse details (was missing entirely)
+            "warehouse":             _warehouse_info(dn.set_warehouse),
             "items":                 items,
+            # CD2-I5 Point 3: full linked Sales Order details
+            "sales_order":           sales_order,
+            # CD2-I5 Point 3: complete payment summary block
+            "payment_summary":       payment_summary,
             "special_instructions":  special,
         })
     except Exception as e:

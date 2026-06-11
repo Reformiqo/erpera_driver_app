@@ -16,18 +16,108 @@ def _driver_record(employee):
     return frappe.db.get_value("Driver", {"employee": employee}, "name")
 
 
+# Cache the Delivery Note fieldnames once per request — repeated meta lookups
+# would otherwise dominate the per-stop loop time.
+_DN_FIELDS = None
+def _dn_field_names():
+    global _DN_FIELDS
+    if _DN_FIELDS is None:
+        _DN_FIELDS = {f.fieldname for f in frappe.get_meta("Delivery Note").fields}
+    return _DN_FIELDS
+
+
+def _resolve_payment_type(dn_name):
+    """Return 'Prepaid' or 'COD' for a Delivery Note (CD2-I5 points 2+3).
+
+    The site stores this under one of several custom fields depending on
+    which integrations are installed:
+      - cowberry_payment_method      (our spec field — set by Sales Order sync)
+      - delhivery_payment_mode       (delhivery_integration's own field)
+      - shopify_order_status         (paid/pending → infer Prepaid/COD)
+
+    Tries each in priority order, falls back to 'Prepaid' (the safe default
+    — online checkouts are the majority of incoming orders today).
+    """
+    available = _dn_field_names()
+    for fname in ("cowberry_payment_method", "delhivery_payment_mode"):
+        if fname in available:
+            val = frappe.db.get_value("Delivery Note", dn_name, fname)
+            if val:
+                return "COD" if str(val).upper().startswith("COD") else "Prepaid"
+    return "Prepaid"
+
+
+def _warehouse_info(warehouse_name):
+    """Return {name, code} for a Warehouse — the shape the Flutter cards
+    consume. `name` is the human label (suffix stripped); `code` is the
+    short code (Warehouse Code custom field if installed, else parsed
+    from the warehouse name prefix)."""
+    if not warehouse_name:
+        return None
+    code = None
+    wh_fields = {f.fieldname for f in frappe.get_meta("Warehouse").fields}
+    if "warehouse_code" in wh_fields:
+        code = frappe.db.get_value("Warehouse", warehouse_name, "warehouse_code")
+    if not code:
+        # Pattern: "Surat Hub - CIPL" → code WH001 isn't computable; fall
+        # back to the prefix before " - " as a stable identifier.
+        code = warehouse_name.split(" - ")[0] if " - " in warehouse_name else warehouse_name
+    label = warehouse_name.replace(" - CIPL", "").replace(" - ET", "").strip() or warehouse_name
+    return {"name": label, "code": code}
+
+
+# Map raw cowberry_delivery_status → UI-friendly "order stage" labels
+# the Flutter cards display (CD2-I5 points 2+3).
+_STAGE_MAP = {
+    "Delivered": "Completed",
+    "Out for Pickup":   "On the way",
+    "Picked Up":        "On the way",
+    "Out for Delivery": "On the way",
+    "At Location":      "On the way",
+    "Failed":     "Attempted",
+    "Returned":   "Attempted",
+    "Attempted":  "Attempted",
+    "Rescheduled":"Rescheduled",
+    "Cancelled":  "Cancelled",
+}
+def _order_stage(delivery_status):
+    return _STAGE_MAP.get(delivery_status or "", "Pending")
+
+
+def _resolve_expected_arrival(stop_estimated, trip_departure, stop_idx,
+                              default_minutes_per_stop=30):
+    """Fallback for missing Delivery Stop.estimated_arrival.
+
+    When the warehouse manager set up the trip but didn't fill estimated
+    arrival per stop, derive an ETA from the trip's departure_time + a
+    fixed per-stop window. Better than handing the Flutter card a null
+    that renders as '--:--' on screen.
+    """
+    if stop_estimated:
+        return stop_estimated
+    if trip_departure and stop_idx:
+        from frappe.utils import add_to_date
+        return add_to_date(trip_departure, minutes=stop_idx * default_minutes_per_stop)
+    return None
+
+
 def _aggregate_trip_stats(trip_name):
     """Roll up per-stop delivery state into the counters the Flutter
     home screen displays. Source of truth is each linked Delivery
     Note's `cowberry_delivery_status` custom field, since stock
     Delivery Stop has no status column.
+
+    Payment type is resolved in Python via _resolve_payment_type() so
+    we never reference cowberry_payment_method directly in SQL — that
+    column may not exist on every bench (e.g. fresh dev installs that
+    haven't run the fixture migrate). Falls back through
+    cowberry_payment_method → delhivery_payment_mode → 'Prepaid'.
     """
     rows = frappe.db.sql(
         """
         SELECT ds.delivery_note,
                ds.visited,
                dn.cowberry_delivery_status   AS delivery_status,
-               dn.cowberry_payment_method    AS payment_method,
                dn.grand_total                AS grand_total
           FROM `tabDelivery Stop` ds
           LEFT JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
@@ -42,19 +132,29 @@ def _aggregate_trip_stats(trip_name):
     delivered = sum(1 for r in rows if r.delivery_status in delivered_set or r.visited)
     attempted = sum(1 for r in rows if r.delivery_status in failed_set)
     pending = max(total - delivered - attempted, 0)
-    cod_expected = sum(
-        flt(r.grand_total) for r in rows
-        if (r.payment_method or "").upper().startswith("COD")
-    )
-    cod_collected = sum(
-        flt(r.grand_total) for r in rows
-        if (r.payment_method or "").upper().startswith("COD") and r.delivery_status == "Delivered"
-    )
+
+    # Resolve payment type per row via the safe helper (one db.get_value
+    # per row; cached fieldnames make this cheap).
+    cod_expected = cod_collected = 0
+    prepaid_count = cod_count = 0
+    for r in rows:
+        if not r.delivery_note:
+            continue
+        ptype = _resolve_payment_type(r.delivery_note)
+        if ptype == "COD":
+            cod_count += 1
+            cod_expected += flt(r.grand_total)
+            if r.delivery_status == "Delivered":
+                cod_collected += flt(r.grand_total)
+        else:
+            prepaid_count += 1
     return {
         "total_stops":         total,
         "delivered":           delivered,
         "attempted":           attempted,
         "pending":             pending,
+        "prepaid_count":       prepaid_count,
+        "cod_count":           cod_count,
         "total_cod_expected":  cod_expected,
         "total_cod_collected": cod_collected,
     }
@@ -91,6 +191,37 @@ def get_trips(date=None):
         trips = []
         for r in rows:
             stats = _aggregate_trip_stats(r.name)
+
+            # CD2-I5 Point 1: per-order status array + warehouse details +
+            # cash_submitted (when Completed).
+            order_rows = frappe.db.sql(
+                """SELECT ds.delivery_note,
+                          IFNULL(dn.cowberry_delivery_status,'Pending') AS delivery_status
+                     FROM `tabDelivery Stop` ds
+                     LEFT JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
+                    WHERE ds.parent = %s
+                    ORDER BY ds.idx ASC""",
+                (r.name,), as_dict=True,
+            )
+            orders_status = [
+                {"delivery_note": o.delivery_note,
+                 "delivery_status": o.delivery_status,
+                 "order_stage": _order_stage(o.delivery_status)}
+                for o in order_rows
+            ]
+            # Source warehouse — Delivery Trip custom field added by
+            # erpera_driver_app fixtures.
+            trip_doc_meta = frappe.db.get_value("Delivery Trip", r.name,
+                ["source_warehouse"], as_dict=True) or {}
+            warehouse = _warehouse_info(trip_doc_meta.get("source_warehouse"))
+
+            # Cash already submitted for this trip (Completed trips only;
+            # otherwise the Flutter card shows the in-progress total).
+            cash_submitted = (
+                _driver_cash_submitted_for_trip(r.name)
+                if r.status in ("Completed", "Cancelled") else 0
+            )
+
             trips.append({
                 "name":                r.name,
                 "date":                str(getdate(r.departure_time)) if r.departure_time else target,
@@ -99,8 +230,13 @@ def get_trips(date=None):
                 "delivered":           stats["delivered"],
                 "attempted":           stats["attempted"],
                 "pending":             stats["pending"],
+                "prepaid_count":       stats["prepaid_count"],
+                "cod_count":           stats["cod_count"],
                 "total_cod_expected":  stats["total_cod_expected"],
                 "total_cod_collected": stats["total_cod_collected"],
+                "cash_submitted":      cash_submitted,
+                "warehouse":           warehouse,
+                "orders_status":       orders_status,
                 # `route_optimised` will be 1 once an optimise_route call
                 # writes a timestamp/flag back to the trip; until then 0.
                 "route_optimised":     0,
@@ -215,11 +351,12 @@ def get_orders(trip=None, status="All"):
             f"""
             SELECT dn.name                                  AS name,
                    dn.customer                              AS customer,
+                   dn.customer_name                         AS customer_name,
                    dn.address_display                       AS customer_address,
                    dn.contact_mobile                        AS contact_mobile,
                    IFNULL(dn.cowberry_delivery_status,'Pending') AS delivery_status,
-                   dn.cowberry_payment_method               AS payment_type,
-                   dn.grand_total                           AS cod_amount,
+                   dn.grand_total                           AS grand_total,
+                   dn.set_warehouse                         AS warehouse_name,
                    ds.idx                                   AS stop_sequence,
                    ds.estimated_arrival                     AS expected_arrival_time,
                    (SELECT COUNT(*) FROM `tabDelivery Note Item` dni
@@ -232,14 +369,38 @@ def get_orders(trip=None, status="All"):
             {"trip": trip},
             as_dict=True,
         )
+
+        # Pull the trip departure once for the expected_arrival_time fallback.
+        trip_departure = frappe.db.get_value("Delivery Trip", trip, "departure_time")
+
+        orders = []
         for r in rows:
-            # cod_amount only counts for COD payment methods; for prepaid
-            # the customer already paid so cod_amount is 0.
-            if not (r.payment_type or "").upper().startswith("COD"):
-                r["cod_amount"] = 0
-            if r.expected_arrival_time:
-                r["expected_arrival_time"] = str(r["expected_arrival_time"])
-        return ok(data={"orders": rows})
+            # CD2-I5 Point 2: payment_type via safe Python-level resolver
+            # (the SQL field cowberry_payment_method may be empty/missing).
+            payment_type = _resolve_payment_type(r.name)
+            # CD2-I5 Point 2: expected_arrival_time fallback when stop-level
+            # value is unset — derive from trip departure + stop sequence.
+            eta = _resolve_expected_arrival(r.expected_arrival_time,
+                                            trip_departure, r.stop_sequence)
+            # CD2-I5 Point 2: warehouse details (was missing entirely).
+            warehouse = _warehouse_info(r.warehouse_name)
+
+            orders.append({
+                "name":                  r.name,
+                "customer":              r.customer_name or r.customer,
+                "customer_address":      r.customer_address,
+                "contact_mobile":        r.contact_mobile,
+                "delivery_status":       r.delivery_status,
+                # CD2-I5 Point 2: per-order stage label (Completed / On the way / Pending)
+                "order_stage":           _order_stage(r.delivery_status),
+                "payment_type":          payment_type,
+                "cod_amount":            (flt(r.grand_total) if payment_type == "COD" else 0),
+                "stop_sequence":         r.stop_sequence,
+                "expected_arrival_time": str(eta) if eta else None,
+                "items_count":           r.items_count,
+                "warehouse":             warehouse,
+            })
+        return ok(data={"orders": orders})
     except Exception as e:
         return err("GET_ORDERS_FAILED", str(e))
 
