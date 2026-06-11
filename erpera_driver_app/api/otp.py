@@ -38,23 +38,48 @@ def _generate_otp():
     return f"{secrets.randbelow(900000) + 100000:06d}"
 
 
-def _send_sms(mobile, otp):
-    """Dispatch OTP via SMS. We don't have an SMS provider wired on
-    this bench yet; for now log a structured entry the operator can
-    forward manually. When the SMS settings are configured Frappe's
-    stock send_sms picks them up automatically and this call goes
-    over-the-wire.
+def _send_sms(mobile, otp, reference_dn=None):
+    """Dispatch OTP via SMS, surfacing failures clearly (CD2-I5 point 5).
+
+    Calls Frappe's stock SMS gateway. Previously this swallowed all
+    exceptions silently, which caused the bug Hardik reported: API
+    returns success, customer never receives OTP, no log trail.
+
+    Now the failure path:
+      1. Logs a SEVERE error to the erpera_driver_app logger with the
+         provider's actual exception (for admin grep'ing).
+      2. Writes a Comment on the linked Delivery Note so the driver
+         operations team can see "OTP requested but SMS dispatch
+         failed: <reason>" right on the DN.
+      3. Returns a failure indicator so the caller can surface a more
+         honest API response if desired (e.g. PAYMENT_PROVIDER_DOWN).
+
+    Returns: True on success, False on failure.
     """
+    message = f"Your delivery OTP is {otp}. Valid for {OTP_VALID_MINUTES} minutes."
     try:
         from frappe.core.doctype.sms_settings.sms_settings import send_sms
-        message = f"Your delivery OTP is {otp}. Valid for {OTP_VALID_MINUTES} minutes."
         send_sms([mobile], message)
-    except Exception:
-        # No SMS provider — log so the dev/operator can see the OTP in
-        # the bench logs without it leaking into the API response.
-        frappe.logger("erpera_driver_app").info(
-            f"[PoD OTP] dispatch placeholder: mobile={mobile} otp={otp}"
+        return True
+    except Exception as e:
+        err_msg = f"SMS dispatch failed: {type(e).__name__}: {e}"
+        frappe.logger("erpera_driver_app").error(
+            f"[PoD OTP] {err_msg} mobile={mobile} dn={reference_dn}"
         )
+        # Drop a Comment on the DN so ops can see this in the document
+        # timeline without trawling the bench logs.
+        if reference_dn:
+            try:
+                frappe.get_doc({
+                    "doctype":         "Comment",
+                    "comment_type":    "Comment",
+                    "reference_doctype": "Delivery Note",
+                    "reference_name":  reference_dn,
+                    "content":         f"⚠ OTP dispatched but SMS gateway failed: {err_msg}",
+                }).insert(ignore_permissions=True)
+            except Exception:
+                pass
+        return False
 
 
 def _gate_cod_online(dn):
@@ -116,14 +141,19 @@ def request_pod_otp(delivery_note=None):
         frappe.db.commit()
 
         mobile = dn.contact_mobile or frappe.db.get_value("Customer", dn.customer, "mobile_no")
+        sms_dispatched = False
         if mobile:
-            _send_sms(mobile, otp)
+            sms_dispatched = _send_sms(mobile, otp, reference_dn=delivery_note)
 
+        # CD2-I5 point 5: surface SMS dispatch state in the response so the
+        # Flutter client can show a fallback affordance (e.g. "OTP couldn't
+        # be sent — please read it to the customer in person").
         return ok(data={
             "otp_requested_at":  str(now),
             "otp_valid_minutes": OTP_VALID_MINUTES,
             "channel":           "SMS",
             "otp_attempts":      attempts,
+            "sms_dispatched":    sms_dispatched,
         })
     except Exception as e:
         return err("REQUEST_OTP_FAILED", str(e))
