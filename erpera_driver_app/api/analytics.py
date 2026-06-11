@@ -15,6 +15,292 @@ SCORE_WEIGHTS = {
 }
 
 
+# ===========================================================================
+# CD2-I5 Point 8 — Unified My Analytics screen API (13 sections)
+# ===========================================================================
+
+@frappe.whitelist(methods=["GET"])
+def get_screen(period="month"):
+    """Single endpoint powering the entire My Analytics screen
+    (Screenshots 5-11). Returns 13 sections in one payload so the
+    Flutter dashboard renders in one render-pass.
+
+    Per Hardik's CD2-I5 point 8 — "Use dummy data where real data is
+    not yet available so the frontend can integrate immediately."
+    Real driver-specific aggregations slot in over time; the response
+    shape is locked TODAY.
+
+    Query:
+        period — today | week | month (default: month)
+
+    Sections returned:
+        performance_score, key_metrics, timing_compliance, vs_fleet,
+        daily_cod_history, cash_submission_compliance,
+        collection_limit_breaches, discrepancy_history, trip_timeline,
+        delay_heatmap, worst_vs_best_trips, per_stop_variance,
+        eta_accuracy_trend
+    """
+    try:
+        employee = _require_driver()
+        d_from, d_to = _period_window(period, None, None)
+        if d_from is None:
+            d_from, d_to = _period_window("month", None, None)
+
+        return ok(data={
+            "period":                     period,
+            "performance_score":          _performance_score(employee, d_from, d_to),
+            "key_metrics":                _key_metrics(employee, d_from, d_to),
+            "timing_compliance":          _timing_compliance(employee, d_from, d_to),
+            "vs_fleet":                   _vs_fleet(employee, d_from, d_to),
+            "daily_cod_history":          _daily_cod_history(employee, d_from, d_to),
+            "cash_submission_compliance": _cash_submission_compliance(employee, d_from, d_to),
+            "collection_limit_breaches":  _collection_limit_breaches(employee, d_from, d_to),
+            "discrepancy_history":        _discrepancy_history(employee, d_from, d_to),
+            "trip_timeline":              _trip_timeline(employee, d_from, d_to),
+            "delay_heatmap":              _delay_heatmap(employee, d_from, d_to),
+            "worst_vs_best_trips":        _worst_vs_best_trips(employee, d_from, d_to),
+            "per_stop_variance":          _per_stop_variance(employee, d_from, d_to),
+            "eta_accuracy_trend":         _eta_accuracy_trend(employee, d_from, d_to),
+        })
+    except Exception as e:
+        return err("GET_ANALYTICS_SCREEN_FAILED", str(e))
+
+
+# ---------------------------------------------------------------------------
+# Section builders. Each returns the shape Flutter expects. Real data is
+# pulled when cheap to compute from existing tables; otherwise dummy data
+# matches the Screenshots so the Flutter team can wire visuals today.
+# Mark each section with TODO when it returns dummies — easy to grep for
+# when iterating real data in.
+# ---------------------------------------------------------------------------
+
+def _performance_score(employee, d_from, d_to):
+    """Section 1 — Performance Score gauge + components."""
+    # Real computation: rates from the existing driver_dashboard logic
+    # would feed in here; for v1 we surface a sane composite + dummy
+    # comparison values matching Screenshot 5's gauge.
+    return {
+        "score":                 0,
+        "vs_last_month_delta":   "Up to last month",  # TODO real delta
+        "fleet_avg_score":       0,
+        "fleet_avg_comparison":  "You are above average",  # TODO real comparison
+        "components": [
+            {"name": "On-Time", "weight_pct": 85, "weight_label": "(40%)"},
+            {"name": "Success", "weight_pct": 96, "weight_label": "(30%)"},
+            {"name": "COD",     "weight_pct": 100, "weight_label": "(20%)"},
+            {"name": "Comms",   "weight_pct": 72, "weight_label": "(10%)"},
+        ],
+        "_dummy": True,  # TODO: replace with real driver_dashboard math
+    }
+
+
+def _key_metrics(employee, d_from, d_to):
+    """Section 2 — Key Metrics tiles (Screenshot 5)."""
+    # Quick real numbers where cheap: deliveries completed from
+    # cowberry_delivery_status=Delivered.
+    delivered = frappe.db.sql(
+        """SELECT COUNT(*) FROM `tabDelivery Note` dn
+             WHERE dn.docstatus=1
+               AND dn.cowberry_delivery_status='Delivered'
+               AND DATE(dn.modified) BETWEEN %s AND %s
+               AND EXISTS (SELECT 1 FROM `tabDelivery Stop` ds
+                            JOIN `tabDelivery Trip` dt ON dt.name=ds.parent
+                            JOIN `tabDriver` d ON d.name=dt.driver
+                           WHERE ds.delivery_note=dn.name AND d.employee=%s)""",
+        (d_from, d_to, employee))[0][0] or 0
+    return {
+        "deliveries_completed": delivered,
+        "success_rate_pct":     0.0,    # TODO real
+        "on_time_rate_pct":     0.0,    # TODO real
+        "avg_delay_mins":       0.0,    # TODO real (avg of late variance)
+        "cod_collected":        0,      # TODO real
+        "wallet_topups": {
+            "count":  0,
+            "amount": 0,
+        },
+        "reschedule_rate_pct":  0.0,    # TODO real
+    }
+
+
+def _timing_compliance(employee, d_from, d_to):
+    """Section 3 — Timing & Compliance (Screenshot 6)."""
+    return {
+        "avg_trip_start_time":     "9:04 AM",   # TODO real
+        "avg_trip_end_time":       "4:38 PM",   # TODO real
+        "avg_time_per_stop_mins":  11,           # TODO real
+        "cash_discrepancies_this_month": 0,
+        "_dummy": True,
+    }
+
+
+def _vs_fleet(employee, d_from, d_to):
+    """Section 4 — vs Fleet Average rates (Screenshot 6)."""
+    return {
+        "on_time_rate": {"driver": 85, "fleet": 78, "delta": +7},
+        "success_rate": {"driver": 96, "fleet": 91, "delta": +5},
+        "_dummy": True,
+    }
+
+
+def _daily_cod_history(employee, d_from, d_to):
+    """Section 5 — Daily COD Collection History (Screenshot 7 bar chart)."""
+    return {
+        "total_period_cod": 84600,        # TODO real
+        "unit":             "INR",
+        "buckets": [
+            {"label": "W1", "amount": 19500},
+            {"label": "W2", "amount": 21000},
+            {"label": "W3", "amount": 21300},
+            {"label": "W4", "amount": 22800},
+        ],
+        "_dummy": True,
+    }
+
+
+def _cash_submission_compliance(employee, d_from, d_to):
+    """Section 6 — Cash Submission Compliance (Screenshot 7 timeline)."""
+    return {
+        "entries": [
+            {"date": "Mar 15", "status": "On time"},
+            {"date": "Mar 14", "status": "Late",  "detail": "14 min late"},
+            {"date": "Mar 13", "status": "On time"},
+            {"date": "Mar 12", "status": "Late",  "detail": "8 min late"},
+            {"date": "Mar 11", "status": "On time"},
+            {"date": "Mar 08", "status": "On time"},
+            {"date": "Mar 06", "status": "Late",  "detail": "8 min late"},
+            {"date": "Mar 03", "status": "On time"},
+        ],
+        "_dummy": True,
+    }
+
+
+def _collection_limit_breaches(employee, d_from, d_to):
+    """Section 7 — Mid-day breaches counter + recent events (Screenshot 8)."""
+    return {
+        "midday_submissions_count": 3,
+        "events": [
+            {"date": "Mar 15", "time": "2:45 PM", "amount": 5050},
+            {"date": "Mar 09", "time": "4:12 PM", "amount": 5120},
+            {"date": "Mar 03", "time": "3:30 PM", "amount": 5085},
+        ],
+        "_dummy": True,
+    }
+
+
+def _discrepancy_history(employee, d_from, d_to):
+    """Section 8 — Cash Submission discrepancies (Screenshot 8)."""
+    return {
+        "entries": [
+            {"id": "DSC-2026-0007", "date": "Mar 14",
+             "variance": -30, "reason": "Customer disputed change of ₹30",
+             "status": "Under review"},
+            {"id": "DSC-2026-0005", "date": "Mar 09",
+             "variance": 10,  "reason": "WM verified - matched",
+             "status": "Resolved"},
+            {"id": "DSC-2026-0003", "date": "Mar 03",
+             "variance": -20, "reason": "Pending supervisor review",
+             "status": "Open"},
+        ],
+        "_dummy": True,
+    }
+
+
+def _trip_timeline(employee, d_from, d_to):
+    """Section 9 — Per-trip planned vs actual (Screenshot 8)."""
+    return {
+        "trips": [
+            {"name": "DT-2026-0041", "date": "15 Mar",
+             "planned_start": "9:00 AM", "actual_start": "9:08 AM",
+             "planned_duration": "4h 05m", "actual_duration": "4h 52m",
+             "on_time_stops": "8 / 8",
+             "badge": "+47 min late"},
+            {"name": "DT-2026-0039", "date": "14 Mar",
+             "planned_start": "9:00 AM", "actual_start": "8:55 AM",
+             "planned_duration": "3h 40m", "actual_duration": "3h 32m",
+             "on_time_stops": "7 / 7",
+             "badge": "8 min early"},
+            {"name": "DT-2026-0037", "date": "13 Mar",
+             "planned_start": "9:00 AM", "actual_start": "9:14 AM",
+             "planned_duration": "5h 00m", "actual_duration": "5h 45m",
+             "on_time_stops": "5 / 9",
+             "badge": "+45 min late"},
+        ],
+        "_dummy": True,
+    }
+
+
+def _delay_heatmap(employee, d_from, d_to):
+    """Section 10 — day-of-week × time-slot delay intensity (Screenshot 9).
+
+    Values per cell: "rare" | "some" | "often" | "usually".
+    Rows = AM/Mid/PM/Eve; Cols = Mon-Sat.
+    """
+    return {
+        "x_labels": ["M", "T", "W", "T", "F", "S", "S"],
+        "y_labels": ["AM", "Mid", "PM", "Eve"],
+        "cells": [
+            ["rare","some","rare","some","often","rare","rare"],
+            ["rare","some","rare","often","often","rare","rare"],
+            ["rare","often","some","often","usually","some","rare"],
+            ["rare","some","some","often","often","rare","rare"],
+        ],
+        "_dummy": True,
+    }
+
+
+def _worst_vs_best_trips(employee, d_from, d_to):
+    """Section 11 — Worst/Best trips list (Screenshot 9-10)."""
+    return {
+        "best": [
+            {"name": "DT-2026-0039", "date": "14 Mar", "score_pct": 100},
+            {"name": "DT-2026-0034", "date": "11 Mar", "score_pct": 95},
+        ],
+        "worst": [
+            {"name": "DT-2026-0037", "date": "13 Mar", "score_pct": 56},
+            {"name": "DT-2026-0041", "date": "15 Mar", "score_pct": 75},
+        ],
+        "_dummy": True,
+    }
+
+
+def _per_stop_variance(employee, d_from, d_to):
+    """Section 12 — Per-stop variance customer list (Screenshot 10-11)."""
+    return {
+        "stops": [
+            {"customer": "Priya Sharma", "variance_mins": -2,  "label": "2 min early"},
+            {"customer": "Amit Patel",   "variance_mins": 0,   "label": "On time"},
+            {"customer": "Meera Joshi",  "variance_mins": 18,  "label": "+18 min late"},
+            {"customer": "Rahul Singh",  "variance_mins": 4,   "label": "+4 min late"},
+            {"customer": "Dev Mehta",    "variance_mins": -1,  "label": "1 min early"},
+            {"customer": "Suresh Mehta", "variance_mins": 12,  "label": "+12 min late"},
+            {"customer": "Anika Desai",  "variance_mins": 6,   "label": "+6 min late"},
+            {"customer": "Neha Verma",   "variance_mins": 22,  "label": "+22 min late"},
+        ],
+        "_dummy": True,
+    }
+
+
+def _eta_accuracy_trend(employee, d_from, d_to):
+    """Section 13 — ETA Accuracy trend line (Screenshot 11)."""
+    # Roughly the shape from Screenshot 11: ETA variance decreasing toward
+    # zero over the period (i.e. driver is improving accuracy).
+    return {
+        "unit":     "min",
+        "trend_note": "Flattening towards zero - Improving accuracy",
+        "points": [
+            {"date": "Mar 01", "variance_mins": 28},
+            {"date": "Mar 03", "variance_mins": 24},
+            {"date": "Mar 06", "variance_mins": 18},
+            {"date": "Mar 09", "variance_mins": 14},
+            {"date": "Mar 12", "variance_mins": 11},
+            {"date": "Mar 15", "variance_mins": 8},
+            {"date": "Mar 18", "variance_mins": 6},
+            {"date": "Mar 22", "variance_mins": 4},
+        ],
+        "_dummy": True,
+    }
+
+
 def _period_window(period, from_date, to_date):
     """Resolve {today, week, month, custom} → (from, to) date pair."""
     t = getdate(today())
