@@ -48,22 +48,85 @@ def _resolve_payment_type(dn_name):
 
 
 def _warehouse_info(warehouse_name):
-    """Return {name, code} for a Warehouse — the shape the Flutter cards
-    consume. `name` is the human label (suffix stripped); `code` is the
-    short code (Warehouse Code custom field if installed, else parsed
-    from the warehouse name prefix)."""
+    """Return rich warehouse info for the Flutter map + route-optimisation
+    surface (CD2-I5 follow-up — Hardik asked for address + lat/lng so
+    the driver app can render the warehouse on the map and seed the
+    route from there).
+
+    Shape:
+        {
+          "name":      "<short label>",
+          "code":      "<short code>",
+          "address":   "<single-line address>",
+          "city":      "...",
+          "state":     "...",
+          "pin":       "...",
+          "latitude":  <float or null>,
+          "longitude": <float or null>,
+          "manager_email":  "...",
+          "manager_mobile": "..."
+        }
+
+    GPS lookup falls through standard → custom fields:
+        warehouse_geo_latitude  → custom_latitude
+        warehouse_geo_longitude → custom_logitude   (sic — typo in fixture)
+    """
     if not warehouse_name:
         return None
-    code = None
     wh_fields = {f.fieldname for f in frappe.get_meta("Warehouse").fields}
-    if "warehouse_code" in wh_fields:
-        code = frappe.db.get_value("Warehouse", warehouse_name, "warehouse_code")
+
+    # Pick whichever fields exist on this bench. The Warehouse doctype
+    # changed shape across ERPNext versions; we only ask for what's
+    # there so this doesn't blow up on older sites.
+    candidate = [
+        "warehouse_name", "city", "state", "pin", "country",
+        "address_line_1", "address_line_2",
+        "warehouse_geo_latitude", "warehouse_geo_longitude",
+        "custom_latitude", "custom_logitude",  # sic
+        "warehouse_manager_email", "warehouse_manager_mobile",
+        "warehouse_code",
+    ]
+    fields = [f for f in candidate if f in wh_fields]
+    row = frappe.db.get_value("Warehouse", warehouse_name, fields, as_dict=True) or {}
+
+    # Code: prefer the dedicated custom field if installed, else the
+    # prefix of the warehouse name (RPFG04 - CIPL → RPFG04).
+    code = row.get("warehouse_code")
     if not code:
-        # Pattern: "Surat Hub - CIPL" → code WH001 isn't computable; fall
-        # back to the prefix before " - " as a stable identifier.
         code = warehouse_name.split(" - ")[0] if " - " in warehouse_name else warehouse_name
+
+    # Human-readable label: strip the company-suffix " - CIPL" / " - ET".
     label = warehouse_name.replace(" - CIPL", "").replace(" - ET", "").strip() or warehouse_name
-    return {"name": label, "code": code}
+
+    # Address: join the line + city + state + pin if any are present.
+    addr_bits = [row.get(k) for k in ("address_line_1", "address_line_2",
+                                     "city", "state", "pin", "country")
+                 if row.get(k)]
+    address = ", ".join(addr_bits) if addr_bits else None
+
+    # GPS: standard field first, custom string fallback.
+    lat = row.get("warehouse_geo_latitude")
+    lng = row.get("warehouse_geo_longitude")
+    if not lat and row.get("custom_latitude"):
+        try: lat = float(row["custom_latitude"])
+        except (TypeError, ValueError): lat = None
+    if not lng and row.get("custom_logitude"):
+        try: lng = float(row["custom_logitude"])
+        except (TypeError, ValueError): lng = None
+
+    return {
+        "name":           label,
+        "code":           code,
+        "address":        address,
+        "city":           row.get("city"),
+        "state":          row.get("state"),
+        "pin":            row.get("pin"),
+        "country":        row.get("country"),
+        "latitude":       float(lat) if lat else None,
+        "longitude":      float(lng) if lng else None,
+        "manager_email":  row.get("warehouse_manager_email"),
+        "manager_mobile": row.get("warehouse_manager_mobile"),
+    }
 
 
 # Map raw cowberry_delivery_status → UI-friendly "order stage" labels
