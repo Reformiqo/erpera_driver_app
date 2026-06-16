@@ -1,9 +1,9 @@
 import hashlib
 import random
 import string
-from datetime import datetime, timedelta
 
 import frappe
+from frappe.utils import add_to_date, now_datetime
 
 PURPOSE_POD = "POD"
 PURPOSE_CASH_SUBMISSION = "CASH_SUBMISSION"
@@ -121,7 +121,13 @@ def dispatch_otp(purpose, reference_doctype, reference_name,
     settings = _get_settings()
     otp = _generate_otp()
     validity = _validity_minutes(purpose, settings)
-    expiry = datetime.now() + timedelta(minutes=validity)
+    # Use Frappe's site-aware now_datetime() — NOT datetime.now() which
+    # returns the SERVER's local clock. FC servers run UTC; sites
+    # typically use Asia/Kolkata (UTC+5:30). Mixing the two means
+    # expires_at is stored 5h30m in the past, so every validate_otp
+    # call returns "OTP has expired" immediately — even when the
+    # caller submits the OTP one second after receiving it.
+    expiry = add_to_date(now_datetime(), minutes=validity)
 
     log = frappe.new_doc("OTP Log")
     log.purpose = purpose
