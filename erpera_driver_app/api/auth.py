@@ -291,8 +291,17 @@ def send_reset_otp(email):
 
 @frappe.whitelist(allow_guest=True)
 def verify_reset_otp(log_name, otp):
+    """Peek-validate the OTP without consuming it.
+
+    The Flutter forgot-password flow needs this step to gate the
+    new-password screen, BUT it then re-submits the same OTP to
+    `reset_password` along with the new password. If we consumed the
+    OTP here, the follow-up reset_password call would fail with
+    OTP_INVALID / 'already used'. So we validate with consume=False
+    and let reset_password be the single consumption point.
+    """
     try:
-        validate_otp_v2(log_name=log_name, otp_input=otp)
+        validate_otp_v2(log_name=log_name, otp_input=otp, consume=False)
         return ok(data={"verified": True})
     except OTPInvalidError as e:
         return e.to_response()
@@ -304,6 +313,7 @@ def verify_reset_otp(log_name, otp):
 def reset_password(log_name, otp, new_password):
     try:
         log = frappe.get_doc("OTP Log", log_name)
+        # consume=True (default) — this is the actual one-shot point.
         validate_otp_v2(log_name=log_name, otp_input=otp)
 
         user = frappe.get_doc("User", log.reference_name)

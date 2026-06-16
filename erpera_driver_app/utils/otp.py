@@ -183,7 +183,20 @@ def dispatch_otp(purpose, reference_doctype, reference_name,
     return log.name
 
 
-def validate_otp(log_name, otp_input):
+def validate_otp(log_name, otp_input, consume=True):
+    """Validate an OTP against an OTP Log row.
+
+    When ``consume`` is True (default) the OTP is marked ``is_used=1`` on
+    success, so it can't be replayed. When False, this acts as a *peek*:
+    the hash, expiry and attempt cap are still checked (and attempts is
+    still incremented, so brute-force is still bounded), but the OTP
+    stays valid for a follow-up call that does consume it.
+
+    The forgot-password flow uses both: ``verify_reset_otp`` peeks so the
+    Flutter app can branch to the new-password screen; ``reset_password``
+    consumes when it actually changes the password. Other flows (PoD,
+    Cash Submission, Wallet) keep the consume-on-validate default.
+    """
     from erpera_driver_app.utils.exceptions import OTPExpiredError, OTPInvalidError, OTPMaxAttemptsError
 
     log = frappe.get_doc("OTP Log", log_name)
@@ -205,7 +218,8 @@ def validate_otp(log_name, otp_input):
         frappe.db.commit()
         raise OTPInvalidError()
 
-    log.is_used = 1
+    if consume:
+        log.is_used = 1
     log.save(ignore_permissions=True)
     frappe.db.commit()
     return True
@@ -216,5 +230,5 @@ def dispatch_otp_v2(*, purpose, reference_doctype, reference_name, recipient_mob
     return dispatch_otp(purpose, reference_doctype, reference_name, recipient_mobile, recipient_email)
 
 
-def validate_otp_v2(*, log_name, otp_input):
-    return validate_otp(log_name, otp_input)
+def validate_otp_v2(*, log_name, otp_input, consume=True):
+    return validate_otp(log_name, otp_input, consume=consume)
