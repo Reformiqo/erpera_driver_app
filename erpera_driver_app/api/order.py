@@ -65,11 +65,17 @@ def get_order_detail(delivery_note=None):
         cod_amount = flt(dn.grand_total) if payment_type == "COD" else 0
 
         # CD2-I5 Point 3: ETA fallback when stop estimated_arrival is null —
-        # derive from the parent trip's departure + stop sequence.
+        # derive from the parent trip's departure + stop sequence. Also
+        # pulls the trip's source_warehouse for the same-trip warehouse
+        # fallback below.
         trip_departure = None
+        trip_source_warehouse = None
         if driver and stop_row:
-            trip_departure = frappe.db.get_value(
-                "Delivery Trip", stop_row[0].trip_name, "departure_time")
+            trip_meta = frappe.db.get_value(
+                "Delivery Trip", stop_row[0].trip_name,
+                ["departure_time", "source_warehouse"], as_dict=True) or {}
+            trip_departure = trip_meta.get("departure_time")
+            trip_source_warehouse = trip_meta.get("source_warehouse")
         eta_resolved = _resolve_expected_arrival(expected_arrival, trip_departure, stop_sequence)
 
         reschedule_count = frappe.db.count("Reschedule Log", {"delivery_note": delivery_note})
@@ -142,8 +148,10 @@ def get_order_detail(delivery_note=None):
             "reschedule_count":      reschedule_count,
             "stop_sequence":         stop_sequence,
             "expected_arrival_time": str(eta_resolved) if eta_resolved else None,
-            # CD2-I5 Point 3: warehouse details (was missing entirely)
-            "warehouse":             _warehouse_info(dn.set_warehouse),
+            # Warehouse: prefer DN.set_warehouse when populated, fall back
+            # to the trip's source_warehouse. Many DNs are created without
+            # set_warehouse — driver still picks from the trip's source.
+            "warehouse":             _warehouse_info(dn.set_warehouse or trip_source_warehouse),
             "items":                 items,
             # CD2-I5 Point 3: full linked Sales Order details
             "sales_order":           sales_order,

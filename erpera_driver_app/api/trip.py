@@ -433,8 +433,18 @@ def get_orders(trip=None, status="All"):
             as_dict=True,
         )
 
-        # Pull the trip departure once for the expected_arrival_time fallback.
-        trip_departure = frappe.db.get_value("Delivery Trip", trip, "departure_time")
+        # Pull the trip departure + source warehouse once for fallback use.
+        trip_meta = frappe.db.get_value("Delivery Trip", trip,
+                                        ["departure_time", "source_warehouse"],
+                                        as_dict=True) or {}
+        trip_departure = trip_meta.get("departure_time")
+        trip_source_warehouse = trip_meta.get("source_warehouse")
+
+        # Hardik (follow-up): get_orders returned warehouse:null when
+        # DN.set_warehouse wasn't populated — but the trip itself carries
+        # source_warehouse. Reuse the same _warehouse_info result for all
+        # orders in the trip so we don't N+1 the lookup.
+        trip_warehouse_info = _warehouse_info(trip_source_warehouse)
 
         orders = []
         for r in rows:
@@ -445,8 +455,14 @@ def get_orders(trip=None, status="All"):
             # value is unset — derive from trip departure + stop sequence.
             eta = _resolve_expected_arrival(r.expected_arrival_time,
                                             trip_departure, r.stop_sequence)
-            # CD2-I5 Point 2: warehouse details (was missing entirely).
-            warehouse = _warehouse_info(r.warehouse_name)
+            # Warehouse: prefer DN.set_warehouse when populated, fall back
+            # to the trip's source_warehouse (the warehouse the driver
+            # physically picks up from). DNs are sometimes created without
+            # set_warehouse — drivers still pick from the trip's source.
+            if r.warehouse_name:
+                warehouse = _warehouse_info(r.warehouse_name)
+            else:
+                warehouse = trip_warehouse_info
 
             orders.append({
                 "name":                  r.name,
