@@ -348,6 +348,141 @@ def reschedule(delivery_note=None, new_date=None, reason=None, reason_note=None)
 
 
 # ---------------------------------------------------------------------------
+# Delivery history (CD2-I5 follow-up — Hardik "API #7 delivery.history")
+# Powers the Driver app's Delivery History screen: every order touched on
+# a chosen date, optionally filtered by payment type (All / Prepaid / COD).
+# Mirrors trip.get_orders' row shape so the Flutter card can be reused.
+# ---------------------------------------------------------------------------
+
+@frappe.whitelist(methods=["GET"])
+def history(date=None, payment_type=None, status=None):
+    """Return delivery history for the authenticated driver on a date.
+
+    Query parameters:
+      * date         — YYYY-MM-DD; defaults to today.
+      * payment_type — "All" | "Prepaid" | "COD"; defaults to "All".
+      * status       — optional filter, "All" | "Completed" | "Attempted"
+                       | "Pending"; defaults to "All". Maps onto the
+                       order_stage labels exposed elsewhere in the API.
+
+    A row is "in history" when (a) it's on a Delivery Trip whose
+    departure_time falls on the requested date AND that trip is assigned
+    to the calling driver. We deliberately don't restrict to terminal
+    statuses — the screen filters by All / Prepaid / COD and shows the
+    full day, including any stops still pending.
+    """
+    try:
+        from erpera_driver_app.api.trip import (
+            _resolve_payment_type, _order_stage, _warehouse_info,
+        )
+
+        driver = _require_driver()
+        target = getdate(date) if date else getdate(today())
+        pt_filter = (payment_type or "All").strip().capitalize()
+        if pt_filter not in ("All", "Prepaid", "Cod", "COD"):
+            return err("VALIDATION_ERROR",
+                       "payment_type must be one of: All, Prepaid, COD.", 400)
+        if pt_filter == "Cod":
+            pt_filter = "COD"
+        status_filter = (status or "All").strip().capitalize()
+        if status_filter not in ("All", "Completed", "Attempted", "Pending",
+                                 "On the way", "Rescheduled", "Cancelled"):
+            status_filter = "All"
+
+        # Pull every DN linked to a trip the driver was assigned to on the
+        # target date. We look at trip.departure_time AND trip.creation —
+        # FC trips often don't have departure_time set until the WM
+        # finalises the route, so creation_date is the safer fallback.
+        rows = frappe.db.sql(
+            """
+            SELECT dn.name AS delivery_note,
+                   dn.customer,
+                   dn.customer_address,
+                   dn.contact_mobile,
+                   dn.grand_total,
+                   dn.posting_date,
+                   dn.cowberry_delivery_status AS delivery_status,
+                   dn.set_warehouse,
+                   dt.name AS trip,
+                   dt.departure_time,
+                   dt.source_warehouse AS trip_warehouse,
+                   ds.idx AS stop_sequence,
+                   ds.estimated_arrival
+              FROM `tabDelivery Trip` dt
+              JOIN `tabDelivery Stop` ds ON ds.parent = dt.name
+              JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
+             WHERE dt.driver = %(driver)s
+               AND (
+                     DATE(dt.departure_time) = %(date)s
+                  OR (dt.departure_time IS NULL AND DATE(dt.creation) = %(date)s)
+               )
+             ORDER BY dt.departure_time DESC, ds.idx ASC
+            """,
+            {"driver": driver, "date": target},
+            as_dict=True,
+        )
+
+        orders = []
+        prepaid_count = 0
+        cod_count = 0
+        cod_collected = 0.0
+        cod_pending = 0.0
+        for r in rows:
+            ptype = _resolve_payment_type(r.delivery_note)
+            if pt_filter != "All" and ptype != pt_filter:
+                continue
+
+            stage = _order_stage(r.delivery_status)
+            if status_filter not in ("All",) and stage != status_filter:
+                # accept "Completed" alias for the Delivered stage too
+                if not (status_filter == "Completed" and stage == "Completed"):
+                    continue
+
+            warehouse_name = r.set_warehouse or r.trip_warehouse
+            grand_total = flt(r.grand_total)
+            row = {
+                "delivery_note":         r.delivery_note,
+                "trip":                  r.trip,
+                "customer":              r.customer,
+                "customer_address":      r.customer_address,
+                "contact_mobile":        r.contact_mobile,
+                "delivery_status":       r.delivery_status or "Pending",
+                "order_stage":           stage,
+                "payment_type":          ptype,
+                "amount":                grand_total,
+                "cod_amount":            grand_total if ptype == "COD" else 0.0,
+                "stop_sequence":         r.stop_sequence,
+                "expected_arrival_time": str(r.estimated_arrival) if r.estimated_arrival else None,
+                "posting_date":          str(r.posting_date) if r.posting_date else None,
+                "warehouse":             _warehouse_info(warehouse_name),
+            }
+            orders.append(row)
+
+            if ptype == "Prepaid":
+                prepaid_count += 1
+            elif ptype == "COD":
+                cod_count += 1
+                if stage == "Completed":
+                    cod_collected += grand_total
+                elif stage in ("Pending", "On the way", "Rescheduled"):
+                    cod_pending += grand_total
+
+        return ok(data={
+            "date":             str(target),
+            "payment_type":     pt_filter,
+            "status":           status_filter,
+            "total_count":      len(orders),
+            "prepaid_count":    prepaid_count,
+            "cod_count":        cod_count,
+            "cod_collected":    cod_collected,
+            "cod_pending":      cod_pending,
+            "orders":           orders,
+        })
+    except Exception as e:
+        return err("HISTORY_FAILED", str(e))
+
+
+# ---------------------------------------------------------------------------
 # Document-event handlers (preserved from prior file)
 # ---------------------------------------------------------------------------
 
