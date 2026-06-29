@@ -96,11 +96,33 @@ def _gate_cod_online(dn):
     return None
 
 
+def _trip_for_dn(delivery_note):
+    """Return the most recent Delivery Trip linked to this DN, or None.
+
+    The new MSG91 send endpoint needs a delivery_trip to authorise the
+    caller against. We pick the latest stop's parent because a DN may be
+    rescheduled across trips.
+    """
+    row = frappe.db.sql(
+        """SELECT ds.parent
+             FROM `tabDelivery Stop` ds
+             JOIN `tabDelivery Trip` dt ON dt.name = ds.parent
+            WHERE ds.delivery_note = %s
+            ORDER BY dt.modified DESC LIMIT 1""",
+        delivery_note,
+    )
+    return row[0][0] if row else None
+
+
 @frappe.whitelist(methods=["POST"])
 def request_pod_otp(delivery_note=None):
-    """§1 Request a fresh OTP for the customer. First call sets
-    otp_attempts=1; subsequent calls bump the counter and rotate the
-    OTP (which also invalidates the prior SMS). Hard-capped at 3.
+    """Send a delivery PoD OTP.
+
+    DEPRECATED endpoint kept for backwards compatibility with existing
+    Flutter builds. Internally delegates to
+    ``cowberry_app.api.otp.send_delivery_otp`` which uses MSG91 as the
+    transport and the Cowberry OTP Log as the source of truth. The
+    response shape below is preserved unchanged for the legacy app.
     """
     try:
         _require_driver()
@@ -114,46 +136,31 @@ def request_pod_otp(delivery_note=None):
         if gate:
             return gate
 
-        attempts = cint(dn.get("otp_attempts")) + 1
-        if attempts > MAX_SEND_ATTEMPTS:
-            return err("OTP_MAX_ATTEMPTS",
-                       f"Maximum OTP send attempts ({MAX_SEND_ATTEMPTS}) reached for this delivery.",
-                       429)
+        trip = _trip_for_dn(delivery_note)
+        if not trip:
+            return err(
+                "TRIP_NOT_FOUND",
+                "This Delivery Note isn't on any Delivery Trip; cannot authorise OTP.",
+                400,
+            )
 
-        otp = _generate_otp()
-        now = now_datetime()
-        expires = add_to_date(now, minutes=OTP_VALID_MINUTES)
+        from cowberry_app.api.otp import send_delivery_otp
 
-        frappe.db.set_value(
-            "Delivery Note", delivery_note,
-            {
-                "otp_hash":              _hash_otp(otp),
-                "otp_requested_at":      now,
-                "otp_expires_at":        expires,
-                "otp_attempts":          attempts,
-                "otp_validate_attempts": 0,        # fresh OTP resets validate-attempt budget
-                "otp_validated":         0,
-                "validation_token":      "",
-                "validation_token_expires_at": None,
-            },
-            update_modified=False,
-        )
-        frappe.db.commit()
+        try:
+            new_res = send_delivery_otp(delivery_trip=trip, delivery_note=delivery_note)
+        except frappe.ValidationError as ve:
+            # Surface MSG91 errors / cap violations under the legacy code.
+            return err("REQUEST_OTP_FAILED", str(ve), 400)
 
-        mobile = dn.contact_mobile or frappe.db.get_value("Customer", dn.customer, "mobile_no")
-        sms_dispatched = False
-        if mobile:
-            sms_dispatched = _send_sms(mobile, otp, reference_dn=delivery_note)
-
-        # CD2-I5 point 5: surface SMS dispatch state in the response so the
-        # Flutter client can show a fallback affordance (e.g. "OTP couldn't
-        # be sent — please read it to the customer in person").
+        attempts = MAX_SEND_ATTEMPTS - int(new_res.get("resends_remaining") or 0)
         return ok(data={
-            "otp_requested_at":  str(now),
-            "otp_valid_minutes": OTP_VALID_MINUTES,
+            "otp_requested_at":  str(now_datetime()),
+            "otp_valid_minutes": int((new_res.get("expires_in") or 600) / 60),
             "channel":           "SMS",
             "otp_attempts":      attempts,
-            "sms_dispatched":    sms_dispatched,
+            "sms_dispatched":    True,
+            "otp_log":           new_res.get("otp_log"),
+            "masked_mobile":     new_res.get("masked_mobile"),
         })
     except Exception as e:
         return err("REQUEST_OTP_FAILED", str(e))
@@ -170,12 +177,15 @@ def resend_pod_otp(delivery_note=None):
 
 @frappe.whitelist(methods=["POST"])
 def validate_pod_otp(delivery_note=None, otp=None):
-    """§3 Compare submitted OTP against the stored SHA-256 hash. On
-    success issue a single-use validation_token (5-min validity) that
-    the Flutter client passes straight to pod.submit_proof.
+    """Validate a PoD OTP and issue a single-use validation_token.
 
-    Hardened: max 5 validate attempts before lockout (caller must
-    request a fresh OTP via §1/§2 to reset the counter).
+    DEPRECATED endpoint kept for backwards compatibility with existing
+    Flutter builds. Delegates verification to
+    ``cowberry_app.api.otp.verify_delivery_otp`` (MSG91 + HMAC-SHA256 +
+    Cowberry OTP Log as source of truth), but passes ``complete=False``
+    so the legacy ``pod.submit_proof`` continues to own the actual
+    delivery completion (Sales Invoice, Driver Collection,
+    daily-collection-limit check, etc.).
     """
     try:
         _require_driver()
@@ -184,48 +194,29 @@ def validate_pod_otp(delivery_note=None, otp=None):
                        "Both `delivery_note` and `otp` are required.", 400)
         if not frappe.db.exists("Delivery Note", delivery_note):
             return err("NOT_FOUND", f"Delivery Note '{delivery_note}' not found.", 404)
-        dn = frappe.get_doc("Delivery Note", delivery_note)
 
-        if cint(dn.get("otp_validated")):
-            return err("OTP_ALREADY_USED",
-                       "This OTP has already been validated. Use the existing token or request a new OTP.",
-                       400)
+        from cowberry_app.api.otp import verify_delivery_otp
 
-        stored_hash = dn.get("otp_hash")
-        if not stored_hash:
-            return err("OTP_INVALID",
-                       "No OTP has been requested for this delivery. Send one first.", 400)
+        try:
+            verify_delivery_otp(
+                otp=otp,
+                delivery_note=delivery_note,
+                delivery_trip=_trip_for_dn(delivery_note),
+                complete=False,
+            )
+        except frappe.ValidationError as ve:
+            return err("OTP_INVALID", str(ve), 400)
 
-        attempts = cint(dn.get("otp_validate_attempts")) + 1
-        if attempts > MAX_VALIDATE_ATTEMPTS:
-            return err("OTP_MAX_ATTEMPTS",
-                       f"Maximum OTP validation attempts ({MAX_VALIDATE_ATTEMPTS}) reached. "
-                       "Request a fresh OTP to continue.", 429)
-
-        expires = dn.get("otp_expires_at")
-        if expires and now_datetime() > expires:
-            frappe.db.set_value("Delivery Note", delivery_note,
-                                "otp_validate_attempts", attempts,
-                                update_modified=False)
-            frappe.db.commit()
-            return err("OTP_EXPIRED",
-                       "The OTP has expired. Request a fresh one.", 400)
-
-        if _hash_otp(str(otp).strip()) != stored_hash:
-            frappe.db.set_value("Delivery Note", delivery_note,
-                                "otp_validate_attempts", attempts,
-                                update_modified=False)
-            frappe.db.commit()
-            return err("OTP_INVALID",
-                       f"Invalid OTP ({attempts} of {MAX_VALIDATE_ATTEMPTS} attempts used).", 400)
-
+        # Issue the legacy validation_token so the Flutter client can
+        # call pod.submit_proof next. The new MSG91 source-of-truth is
+        # already marked Verified in the OTP Log; this token only
+        # bridges the financial-side flow until clients migrate.
         token = "tkn_" + frappe.generate_hash(length=16)
         token_expires = add_to_date(now_datetime(), minutes=VALIDATION_TOKEN_MINUTES)
         frappe.db.set_value(
             "Delivery Note", delivery_note,
             {
                 "otp_validated":               1,
-                "otp_validate_attempts":       attempts,
                 "validation_token":            token,
                 "validation_token_expires_at": token_expires,
             },
