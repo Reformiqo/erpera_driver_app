@@ -355,21 +355,28 @@ def reschedule(delivery_note=None, new_date=None, reason=None, reason_note=None)
 # ---------------------------------------------------------------------------
 
 @frappe.whitelist(methods=["GET"])
-def history(date=None, payment_type=None, status=None):
-    """Return delivery history for the authenticated driver on a date.
+def history(date=None, payment_type=None, status=None,
+            **kwargs):
+    """Return delivery history for the authenticated driver.
 
-    Query parameters:
-      * date         — YYYY-MM-DD; defaults to today.
+    Query parameters (all optional):
+      * date         — YYYY-MM-DD single day; shorthand for from=to=date.
+      * from / to    — YYYY-MM-DD inclusive range (preferred for the
+                       History screen filter). When only one is given,
+                       the other defaults to it (single-day behaviour).
+                       Aliases ``from_date`` / ``to_date`` are also
+                       accepted because ``from`` collides with Python's
+                       reserved word in some clients.
       * payment_type — "All" | "Prepaid" | "COD"; defaults to "All".
       * status       — optional filter, "All" | "Completed" | "Attempted"
                        | "Pending"; defaults to "All". Maps onto the
                        order_stage labels exposed elsewhere in the API.
 
-    A row is "in history" when (a) it's on a Delivery Trip whose
-    departure_time falls on the requested date AND that trip is assigned
-    to the calling driver. We deliberately don't restrict to terminal
-    statuses — the screen filters by All / Prepaid / COD and shows the
-    full day, including any stops still pending.
+    A row is "in history" when its Delivery Trip's departure_time (or
+    creation as a fallback) falls within the requested range AND the
+    trip is assigned to the calling driver. We deliberately don't
+    restrict to terminal statuses — the screen filters by All / Prepaid
+    / COD and shows the full window, including stops still pending.
     """
     try:
         from erpera_driver_app.api.trip import (
@@ -377,7 +384,23 @@ def history(date=None, payment_type=None, status=None):
         )
 
         driver = _require_driver()
-        target = getdate(date) if date else getdate(today())
+
+        # ``from`` is a Python reserved word so it lands in **kwargs when
+        # callers pass ?from=...; accept the aliases too.
+        from_raw = kwargs.get("from") or kwargs.get("from_date")
+        to_raw   = kwargs.get("to")   or kwargs.get("to_date")
+
+        if from_raw or to_raw:
+            from_date = getdate(from_raw or to_raw)
+            to_date   = getdate(to_raw   or from_raw)
+        elif date:
+            from_date = to_date = getdate(date)
+        else:
+            from_date = to_date = getdate(today())
+
+        if from_date > to_date:
+            from_date, to_date = to_date, from_date
+
         pt_filter = (payment_type or "All").strip().capitalize()
         if pt_filter not in ("All", "Prepaid", "Cod", "COD"):
             return err("VALIDATION_ERROR",
@@ -389,10 +412,11 @@ def history(date=None, payment_type=None, status=None):
                                  "On the way", "Rescheduled", "Cancelled"):
             status_filter = "All"
 
-        # Pull every DN linked to a trip the driver was assigned to on the
-        # target date. We look at trip.departure_time AND trip.creation —
-        # FC trips often don't have departure_time set until the WM
-        # finalises the route, so creation_date is the safer fallback.
+        # Pull every DN linked to a trip the driver was assigned to in
+        # the [from_date, to_date] window. We look at trip.departure_time
+        # AND trip.creation — FC trips often don't have departure_time
+        # set until the WM finalises the route, so creation_date is the
+        # safer fallback.
         rows = frappe.db.sql(
             """
             SELECT dn.name AS delivery_note,
@@ -413,12 +437,13 @@ def history(date=None, payment_type=None, status=None):
               JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
              WHERE dt.driver = %(driver)s
                AND (
-                     DATE(dt.departure_time) = %(date)s
-                  OR (dt.departure_time IS NULL AND DATE(dt.creation) = %(date)s)
+                     (DATE(dt.departure_time) BETWEEN %(from)s AND %(to)s)
+                  OR (dt.departure_time IS NULL
+                      AND DATE(dt.creation) BETWEEN %(from)s AND %(to)s)
                )
              ORDER BY dt.departure_time DESC, ds.idx ASC
             """,
-            {"driver": driver, "date": target},
+            {"driver": driver, "from": from_date, "to": to_date},
             as_dict=True,
         )
 
@@ -468,7 +493,12 @@ def history(date=None, payment_type=None, status=None):
                     cod_pending += grand_total
 
         return ok(data={
-            "date":             str(target),
+            "from":             str(from_date),
+            "to":               str(to_date),
+            # Back-compat: keep ``date`` for clients still reading it.
+            # When the range collapses to a single day, this is the day;
+            # otherwise it carries the `from` so legacy code doesn't break.
+            "date":             str(from_date),
             "payment_type":     pt_filter,
             "status":           status_filter,
             "total_count":      len(orders),
