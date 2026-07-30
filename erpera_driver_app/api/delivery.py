@@ -380,10 +380,14 @@ def history(date=None, payment_type=None, status=None,
     """
     try:
         from erpera_driver_app.api.trip import (
-            _resolve_payment_type, _order_stage, _warehouse_info,
+            _driver_record, _resolve_payment_type, _order_stage, _warehouse_info,
         )
 
-        driver = _require_driver()
+        employee = _require_driver()
+        # Delivery Trip.driver links to Driver, not Employee — resolve
+        # once so the SQL filter below matches. Without this every row
+        # is dropped and history returns 0.
+        driver = _driver_record(employee)
 
         # ``from`` is a Python reserved word so it lands in **kwargs when
         # callers pass ?from=...; accept the aliases too.
@@ -400,6 +404,24 @@ def history(date=None, payment_type=None, status=None,
 
         if from_date > to_date:
             from_date, to_date = to_date, from_date
+
+        # No Driver record for this employee → no assignable trips.
+        # Return the empty shape so the Flutter list renders as "no
+        # deliveries" instead of an INTERNAL error.
+        if not driver:
+            return ok(data={
+                "from":          str(from_date),
+                "to":            str(to_date),
+                "date":          str(from_date),
+                "payment_type":  (payment_type or "All").strip().capitalize(),
+                "status":        (status or "All").strip().capitalize(),
+                "total_count":   0,
+                "prepaid_count": 0,
+                "cod_count":     0,
+                "cod_collected": 0.0,
+                "cod_pending":   0.0,
+                "orders":        [],
+            })
 
         pt_filter = (payment_type or "All").strip().capitalize()
         if pt_filter not in ("All", "Prepaid", "Cod", "COD"):
