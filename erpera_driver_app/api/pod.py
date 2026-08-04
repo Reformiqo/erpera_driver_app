@@ -16,6 +16,7 @@ from frappe.utils import flt, now_datetime, today
 
 from erpera_driver_app.api.driver import _require_driver
 from erpera_driver_app.utils.response import err, ok
+from erpera_driver_app.utils.trip_sync import mark_stop_visited, trip_for_delivery_note
 
 MAX_PHOTO_BYTES = 5 * 1024 * 1024  # spec: max 5 MB
 
@@ -158,6 +159,11 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         frappe.db.set_value("Delivery Note", delivery_note, update, update_modified=False)
         frappe.db.commit()
 
+        # Tick this DN's stop on the trip so Delivery Trip.status rolls up to
+        # In Transit / Completed. Best-effort — the response below is
+        # unchanged whether or not the roll-up lands.
+        mark_stop_visited(delivery_note)
+
         limit_warning = (
             bool(daily_limit) and is_cod and new_collected >= (daily_limit * 0.8)
         )
@@ -247,6 +253,12 @@ def _roll_into_driver_collection(employee, dn, cod_amount, payment_method):
         col.insert(ignore_permissions=True)
         col_name = col.name
     col = frappe.get_doc("Driver Collection", col_name)
+
+    # Stamp the trip on first use. cash_submission.initiate looks the
+    # collection up by trip, so without this the end-of-day handover can
+    # never find it.
+    if not col.get("trip"):
+        col.trip = trip_for_delivery_note(dn.name)
 
     pm = (payment_method or "").upper()
     if pm.startswith("COD") and "ONLINE" in pm:

@@ -1,5 +1,5 @@
 import frappe
-from frappe.utils import flt, today
+from frappe.utils import flt, getdate, today
 
 from erpera_driver_app.api.driver import _require_driver
 from erpera_driver_app.utils.exceptions import OTPInvalidError
@@ -19,9 +19,23 @@ def _collection_for_trip(trip, driver_employee):
     """Look up the Driver Collection backing a Delivery Trip for this
     driver. Used by initiate when called with the spec body that keys
     off `delivery_trip`."""
-    return frappe.db.get_value(
+    name = frappe.db.get_value(
         "Driver Collection",
         {"trip": trip, "driver": driver_employee},
+        "name",
+    )
+    if name:
+        return name
+    # Collections are opened per driver per day, and `trip` only started
+    # being stamped on them recently — rows created before that (and any
+    # day where the driver ran more than one trip) have it empty. Fall
+    # back to the driver's collection for the trip's own date.
+    departure = frappe.db.get_value("Delivery Trip", trip, "departure_time")
+    if not departure:
+        return None
+    return frappe.db.get_value(
+        "Driver Collection",
+        {"driver": driver_employee, "collection_date": getdate(departure)},
         "name",
     )
 
@@ -144,12 +158,71 @@ def _resolve_warehouse_recipient(collection):
     if not source_warehouse:
         return None, None
 
-    email, mobile = frappe.db.get_value(
-        "Warehouse",
-        source_warehouse,
-        ["warehouse_manager_email", "warehouse_manager_mobile"],
-    ) or (None, None)
-    return email, mobile
+    return _warehouse_manager_contact(source_warehouse)
+
+
+def _warehouse_manager_contact(warehouse):
+    """Find the warehouse manager's email/mobile.
+
+    A manager can be recorded in four different places depending on how the
+    warehouse was set up, so fall through them most-explicit first:
+
+      1. warehouse_manager_email / warehouse_manager_mobile  (dedicated fields)
+      2. warehouse_manager        → Employee                 (this app's field)
+      3. custom_warehouse_manager → User
+      4. the Contact linked to the Warehouse — ERPNext's standard
+         "Address and Contact" section, where most people look first
+
+    Reading only (1) meant a warehouse that looked fully configured in the
+    desk still returned WAREHOUSE_NOT_CONFIGURED. Set (1) explicitly when
+    you need certainty about who receives the OTP — it wins over the rest.
+
+    Returns `(email, mobile)`; either may be None.
+    """
+    available = {f.fieldname for f in frappe.get_meta("Warehouse").fields}
+    wanted = [f for f in ("warehouse_manager_email", "warehouse_manager_mobile",
+                          "warehouse_manager", "custom_warehouse_manager")
+              if f in available]
+    row = (frappe.db.get_value("Warehouse", warehouse, wanted, as_dict=True)
+           if wanted else None) or {}
+
+    email = row.get("warehouse_manager_email")
+    mobile = row.get("warehouse_manager_mobile")
+    if email or mobile:
+        return email, mobile
+
+    if row.get("warehouse_manager"):
+        emp = frappe.db.get_value(
+            "Employee", row["warehouse_manager"],
+            ["company_email", "personal_email", "cell_number"], as_dict=True) or {}
+        email = emp.get("company_email") or emp.get("personal_email")
+        mobile = emp.get("cell_number")
+        if email or mobile:
+            return email, mobile
+
+    if row.get("custom_warehouse_manager"):
+        usr = frappe.db.get_value(
+            "User", row["custom_warehouse_manager"],
+            ["email", "mobile_no"], as_dict=True) or {}
+        email, mobile = usr.get("email"), usr.get("mobile_no")
+        if email or mobile:
+            return email, mobile
+
+    linked = frappe.db.sql(
+        """SELECT c.email_id, c.mobile_no
+             FROM `tabContact` c
+             JOIN `tabDynamic Link` dl ON dl.parent = c.name
+            WHERE dl.parenttype = 'Contact'
+              AND dl.link_doctype = 'Warehouse'
+              AND dl.link_name = %s
+            ORDER BY c.modified DESC
+            LIMIT 1""",
+        (warehouse,), as_dict=True,
+    )
+    if linked:
+        return linked[0].get("email_id"), linked[0].get("mobile_no")
+
+    return None, None
 
 
 @frappe.whitelist(methods=["POST"])
@@ -204,6 +277,12 @@ def initiate(
 
         amount = amount if amount is not None else physical_amount
         col = frappe.get_doc("Driver Collection", collection_id)
+        # Collections opened before `trip` started being stamped have it
+        # empty. Backfill it — _resolve_warehouse_recipient() walks
+        # collection.trip → source_warehouse to find the OTP recipient, so
+        # without this the handover fails even once the collection is found.
+        if delivery_trip and not col.get("trip"):
+            col.db_set("trip", delivery_trip, update_modified=False)
         if col.driver != employee:
             return err(
                 "ACCESS_DENIED",
@@ -213,6 +292,13 @@ def initiate(
 
         # UPI / Bank Transfer evidence is mandatory when the driver
         # claims a non-cash handover (FRD §10.3 row 5).
+        # The API doc documents this value as "Cash" but the Cash Submission
+        # Select field only accepts "Physical Cash" — normalise so a client
+        # coded against the doc doesn't get a spurious screenshot demand and
+        # then fail the Select validation on save.
+        if submission_method and submission_method.strip().lower() in ("cash", "physical cash"):
+            submission_method = "Physical Cash"
+
         if submission_method and submission_method != "Physical Cash":
             if not screenshot_url:
                 return err(
