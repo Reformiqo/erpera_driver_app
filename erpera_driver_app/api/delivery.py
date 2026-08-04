@@ -15,7 +15,7 @@ from erpera_driver_app.utils.exceptions import (
 )
 from erpera_driver_app.utils.geo import validate_coords
 from erpera_driver_app.utils.response import err, ok
-from erpera_driver_app.utils.trip_sync import mark_stop_visited
+from erpera_driver_app.utils.trip_sync import mark_stop_visited, sync_trip_status
 
 
 # Lifecycle map per spec. Terminal states (Delivered, Cancelled) have
@@ -135,6 +135,14 @@ def _do_update_status(delivery_note, target_status, gps_lat=None, gps_lng=None,
             travel_variance = int((now - expected_arrival).total_seconds() // 60)
 
     dn.cowberry_delivery_status = target_status
+    # Stamp the driver's position on the DN whenever they send one — until
+    # now GPS only reached the Delivery Attempt Log, so mark_arrived left
+    # cowberry_delivery_lat/lng at 0 and the desk had no arrival location.
+    # pod.submit_proof overwrites these at delivery, which is correct: the
+    # final proof-of-delivery position wins.
+    if coords:
+        dn.cowberry_delivery_lat = coords[0]
+        dn.cowberry_delivery_lng = coords[1]
     if notes:
         dn.cowberry_delivery_notes = notes
     dn.flags.ignore_permissions = True
@@ -146,6 +154,10 @@ def _do_update_status(delivery_note, target_status, gps_lat=None, gps_lng=None,
     # pod.submit_proof — roll the trip up from here too so both paths agree.
     if target_status == "Delivered":
         mark_stop_visited(dn.name)
+    else:
+        # Pickup / on-the-way / arrived don't mark the stop visited, but they
+        # do mean the trip has started — pull it out of "Scheduled".
+        sync_trip_status(dn.name)
 
     return ok(data={
         "delivery_note":        dn.name,
@@ -271,8 +283,13 @@ def attempt(delivery_note=None, outcome=None, reason_note=None,
             "Delivery Attempt Log",
             {"delivery_note": delivery_note, "attempt_status": "Attempted"},
         )
-        frappe.db.set_value("Delivery Note", delivery_note,
-                            "cowberry_delivery_status", "Attempted",
+        dn_update = {"cowberry_delivery_status": "Attempted"}
+        # Same rule as _do_update_status: any GPS the driver sends is stamped
+        # on the DN, not just buried in the Attempt Log.
+        if coords:
+            dn_update["cowberry_delivery_lat"] = coords[0]
+            dn_update["cowberry_delivery_lng"] = coords[1]
+        frappe.db.set_value("Delivery Note", delivery_note, dn_update,
                             update_modified=False)
         frappe.db.commit()
         return ok(data={

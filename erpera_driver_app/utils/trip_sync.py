@@ -14,6 +14,90 @@ side of the same bridge.
 import frappe
 
 
+# A stop counts as "work has started" when its Delivery Note sits in any of
+# these. Both status fields are listed because the two driver apps write
+# different ones: cowberry_app writes `delivery_status`, erpera_driver_app
+# writes `cowberry_delivery_status`. Same concept, different vocabulary —
+# "In Transit" there is "Out for Delivery" here.
+IN_PROGRESS_STATUSES = {
+    "Out for Pickup",
+    "Picked Up",
+    "In Transit",        # cowberry_app
+    "Out for Delivery",  # erpera_driver_app
+    "At Location",
+    "OTP Pending",       # cowberry_app
+}
+
+# Delivery Note status fields to consult, in no particular order — a stop is
+# in progress if either one says so.
+_DN_STATUS_FIELDS = ("delivery_status", "cowberry_delivery_status")
+
+
+def _any_stop_in_progress(trip):
+    """True when at least one live stop on the trip has started moving."""
+    available = {f.fieldname for f in frappe.get_meta("Delivery Note").fields}
+    fields = [f for f in _DN_STATUS_FIELDS if f in available]
+    if not fields:
+        return False
+    cols = ", ".join(f"dn.`{f}`" for f in fields)
+    rows = frappe.db.sql(
+        f"""SELECT {cols}
+              FROM `tabDelivery Stop` ds
+              JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
+             WHERE ds.parent = %s AND dn.docstatus = 1""",
+        (trip,),
+        as_dict=True,
+    )
+    return any(r.get(f) in IN_PROGRESS_STATUSES for r in rows for f in fields)
+
+
+def _recompute_trip_status(trip):
+    """Roll the trip's status up from its stops. Returns the new status."""
+    trip_doc = frappe.get_doc("Delivery Trip", trip)
+    # ERPNext's own rule first: docstatus → Draft/Scheduled/Cancelled, then
+    # all(visited) → Completed, any(visited) → In Transit.
+    trip_doc.update_status()
+    # ERPNext only leaves "Scheduled" once a stop is marked visited, which
+    # happens at delivery. A driver who has picked up and is on the way is
+    # plainly no longer "Scheduled" — promote those trips.
+    #
+    # Deliberately an upgrade only: Draft, Cancelled, In Transit and
+    # Completed are all left exactly as ERPNext computed them.
+    if (trip_doc.docstatus == 1 and trip_doc.status == "Scheduled"
+            and _any_stop_in_progress(trip)):
+        trip_doc.db_set("status", "In Transit", update_modified=False)
+    return trip_doc.status
+
+
+def sync_trip_status(delivery_note):
+    """Recompute the status of every trip carrying this Delivery Note,
+    without touching `visited`.
+
+    Used for non-delivery transitions (pickup, on the way, arrived) so the
+    trip reflects that work has started. Best-effort; never raises.
+    """
+    if not delivery_note:
+        return None
+    try:
+        trips = frappe.db.sql_list(
+            """SELECT DISTINCT parent FROM `tabDelivery Stop`
+                WHERE delivery_note = %s""",
+            (delivery_note,),
+        )
+        status = None
+        for trip in trips:
+            status = _recompute_trip_status(trip)
+        if trips:
+            frappe.db.commit()
+        return status
+    except Exception:
+        frappe.log_error(
+            title="erpera_driver_app: could not sync Delivery Trip status",
+            message=f"delivery_note={delivery_note}\n{frappe.get_traceback()}",
+        )
+        return None
+
+
 def trip_for_delivery_note(delivery_note):
     """Return the submitted Delivery Trip carrying this Delivery Note.
 
@@ -71,11 +155,7 @@ def mark_stop_visited(delivery_note):
 
         status = None
         for trip in trips:
-            # Reuse ERPNext's own all()/any() rule rather than re-deriving it,
-            # so Draft and Cancelled trips keep their docstatus-driven status.
-            trip_doc = frappe.get_doc("Delivery Trip", trip)
-            trip_doc.update_status()
-            status = trip_doc.status
+            status = _recompute_trip_status(trip)
 
         frappe.db.commit()
         return status
