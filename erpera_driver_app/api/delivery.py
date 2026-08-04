@@ -15,6 +15,7 @@ from erpera_driver_app.utils.exceptions import (
 )
 from erpera_driver_app.utils.geo import validate_coords
 from erpera_driver_app.utils.response import err, ok
+from erpera_driver_app.utils.trip_sync import mark_stop_visited
 
 
 # Lifecycle map per spec. Terminal states (Delivered, Cancelled) have
@@ -139,6 +140,12 @@ def _do_update_status(delivery_note, target_status, gps_lat=None, gps_lng=None,
     dn.flags.ignore_permissions = True
     dn.save(ignore_permissions=True)
     frappe.db.commit()
+
+    # Delivered can also be reached straight through update_status (the
+    # transition is allowed from At Location / Out for Delivery), not just via
+    # pod.submit_proof — roll the trip up from here too so both paths agree.
+    if target_status == "Delivered":
+        mark_stop_visited(dn.name)
 
     return ok(data={
         "delivery_note":        dn.name,
