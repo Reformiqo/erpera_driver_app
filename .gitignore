@@ -1,0 +1,8 @@
+# Python bytecode — regenerated on every import, never belongs in the repo.
+__pycache__/
+*.py[cod]
+
+# Packaging / build artefacts
+*.egg-info/
+build/
+dist/

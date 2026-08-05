@@ -40,12 +40,52 @@ def _deliver_via_email(recipient, subject, body):
     )
 
 
-def _deliver_via_sms(recipient, body):
-    """Send the OTP via Frappe's stock SMS gateway.
+# cowberry_app's MSG91 helper keys its validity lookup off its own purpose
+# wording. Ours are terse constants — map across so the expiry MSG91 quotes
+# in the SMS matches the expiry we actually enforce on the OTP Log.
+_MSG91_PURPOSE = {
+    PURPOSE_POD:             "Delivery PoD",
+    PURPOSE_CASH_SUBMISSION: "Cash Submission",
+    PURPOSE_WALLET:          "Wallet Top-up",
+    PURPOSE_DRIVER_LOGIN:    "Driver Login",
+}
 
-    Raises whatever send_sms raises (no SMS Settings, provider HTTP
-    error, etc.) so the caller can record the failure visibly.
+
+def _deliver_via_sms(recipient, body, otp=None, purpose=None):
+    """Send the OTP by SMS, preferring MSG91 over Frappe's stock gateway.
+
+    MSG91 is the gateway actually provisioned on this site (MSG91 Settings
+    holds the auth key, sender ID and the DLT-registered template). Frappe's
+    built-in SMS Settings is empty, and `send_sms` responds to that by
+    msgprinting "Please Update SMS Settings" — the request still returns 200
+    and no OTP is ever delivered, which is worse than an outright failure.
+
+    India's DLT rules also mean plain-text SMS through a generic gateway gets
+    dropped; only the registered template route reliably lands.
+
+    Falls back to `send_sms` when MSG91 isn't installed or isn't enabled, so
+    benches without cowberry_app keep working. Raises on gateway failure so
+    the caller records it against the OTP Log.
     """
+    settings = None
+    msg91_send = None
+    normalise = None
+    if otp:
+        try:
+            from cowberry_app.api.otp import _msg91_send, _normalise_mobile
+            settings = frappe.get_single("MSG91 Settings")
+            if settings.get("enabled") and settings.get("auth_key"):
+                msg91_send, normalise = _msg91_send, _normalise_mobile
+        except (ImportError, frappe.DoesNotExistError):
+            pass
+
+    if msg91_send:
+        full_mobile = normalise(
+            recipient, getattr(settings, "country_code", None) or "91"
+        )
+        msg91_send(settings, _MSG91_PURPOSE.get(purpose, purpose), full_mobile, otp)
+        return
+
     from frappe.core.doctype.sms_settings.sms_settings import send_sms
     send_sms([recipient], body)
 
@@ -167,7 +207,7 @@ def dispatch_otp(purpose, reference_doctype, reference_name,
     # cash_submission (WM mobile fallback), wallet.initiate_topup (customer).
     if recipient_mobile:
         try:
-            _deliver_via_sms(recipient_mobile, sms_body)
+            _deliver_via_sms(recipient_mobile, sms_body, otp=otp, purpose=purpose)
         except Exception as e:
             _record_failure(log.name, "SMS", e, reference_doctype, reference_name)
 
