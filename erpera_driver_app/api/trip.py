@@ -38,13 +38,35 @@ def _resolve_payment_type(dn_name):
     Tries each in priority order, falls back to 'Prepaid' (the safe default
     — online checkouts are the majority of incoming orders today).
     """
+    val = _raw_payment_method(dn_name)
+    if val:
+        return "COD" if str(val).upper().startswith("COD") else "Prepaid"
+    return "Prepaid"
+
+
+# Order matters: the app's own field first (so nothing that resolved before
+# starts resolving differently), then `payment_type` — the DN Select that
+# carries the canonical Prepaid / COD-Cash / COD-Online options and is the
+# only field populated on some orders — then delhivery's.
+_PAYMENT_FIELDS = ("cowberry_payment_method", "payment_type", "delhivery_payment_mode")
+
+
+def _raw_payment_method(dn_name):
+    """Return the Delivery Note's payment method verbatim, from whichever
+    field carries it.
+
+    Three fields hold this on the live site and none of them is filled in
+    consistently, so reading just one silently mislabels orders as Prepaid —
+    which then zeroes their COD amounts all the way through to the cash
+    screen. Returns None when the order genuinely isn't classified.
+    """
     available = _dn_field_names()
-    for fname in ("cowberry_payment_method", "delhivery_payment_mode"):
+    for fname in _PAYMENT_FIELDS:
         if fname in available:
             val = frappe.db.get_value("Delivery Note", dn_name, fname)
             if val:
-                return "COD" if str(val).upper().startswith("COD") else "Prepaid"
-    return "Prepaid"
+                return val
+    return None
 
 
 def _warehouse_info(warehouse_name):
