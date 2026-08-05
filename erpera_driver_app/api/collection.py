@@ -95,15 +95,35 @@ def get_screen(date=None):
         cod_orders_completed = 0
 
         if col_name:
+            from erpera_driver_app.api.trip import _resolve_payment_type
             col = frappe.get_doc("Driver Collection", col_name)
             for row in (col.get("order_breakdown") or []):
                 amt = flt(row.get("total_amount") or 0)
                 cash_amt = flt(row.get("cash_amount") or 0)
                 online_amt = flt(row.get("online_amount") or 0)
-                ptype = (row.get("payment_method") or "Prepaid")
+                ptype = (row.get("payment_method") or "")
+                dn_name = row.get("delivery_note")
+                # Rows written before total_amount held the order value carry
+                # a 0 here — read it off the Delivery Note instead so existing
+                # collections show real amounts without a data migration.
+                if not amt and dn_name:
+                    amt = flt(frappe.db.get_value("Delivery Note", dn_name, "grand_total") or 0)
+                # Same for the payment method: rows stamped from a DN whose
+                # method field was empty came out "Prepaid". Re-resolve.
+                if not ptype and dn_name:
+                    ptype = _resolve_payment_type(dn_name)
                 # Treat Cash/COD-* as COD, anything else as Prepaid
                 is_cod = ptype.upper().startswith("CASH") or "COD" in ptype.upper()
-                status = "Settled" if (cash_amt + online_amt) >= amt and amt > 0 else "Pending"
+                # Prepaid orders are paid at checkout — delivering one settles
+                # it. Only COD needs the cash to actually add up. The old rule
+                # demanded collected >= amount for both, so every prepaid row
+                # showed "Pending" forever.
+                delivered = (row.get("status") == "Delivered")
+                if is_cod:
+                    settled = delivered and amt > 0 and (cash_amt + online_amt) >= amt
+                else:
+                    settled = delivered
+                status = "Settled" if settled else "Pending"
                 order_breakdown.append({
                     "customer":     row.get("customer_name") or row.get("customer"),
                     "delivery_note": row.get("delivery_note"),
@@ -181,18 +201,26 @@ def get_screen(date=None):
                                           "warehouse_manager_email")
         masked_wm = _mask_email(wm_email) if wm_email else None
 
-        submission = {
-            "available_to_submit":     available_to_submit,
-            "cod_orders_completed":    cod_orders_completed,
-            "payment_method_options":  ["Physical Cash", "Online-UPI"],
-            "active_submission":       existing_sub.name if existing_sub else None,
-            "wm_otp": {
-                "required":         True,
-                "validity_minutes": 5,
-                "sent_to":          masked_wm,
-                "status":           otp_status,
-            },
-        }
+        # The block above always built this, so the screen offered a cash
+        # handover with nothing in hand — no COD collected, no submission in
+        # flight. Send null in that case so Flutter can hide the CTA.
+        # An in-flight submission still counts: once initiate() closes the
+        # collection there is nothing left to submit, but the driver still
+        # needs the OTP prompt.
+        submission = None
+        if available_to_submit > 0 or existing_sub:
+            submission = {
+                "available_to_submit":     available_to_submit,
+                "cod_orders_completed":    cod_orders_completed,
+                "payment_method_options":  ["Physical Cash", "Online-UPI"],
+                "active_submission":       existing_sub.name if existing_sub else None,
+                "wm_otp": {
+                    "required":         True,
+                    "validity_minutes": 5,
+                    "sent_to":          masked_wm,
+                    "status":           otp_status,
+                },
+            }
 
         return ok(data={
             "date":                target,

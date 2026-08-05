@@ -103,7 +103,12 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
                        "validation_token has expired. Validate the OTP again.", 400)
 
         # 2) COD amount check (only when COD-*)
-        pay_method = (dn.get("cowberry_payment_method") or "")
+        # Resolve across every field that can carry the payment method —
+        # reading only cowberry_payment_method labelled orders Prepaid when
+        # the value actually sat in `payment_type`, which then recorded a
+        # zero COD amount against a real cash collection.
+        from erpera_driver_app.api.trip import _raw_payment_method
+        pay_method = (_raw_payment_method(dn.name) or "")
         is_cod = pay_method.upper().startswith("COD")
         cod_amount = flt(cod_collected_amount) if cod_collected_amount is not None else 0
         if is_cod:
@@ -286,7 +291,10 @@ def _roll_into_driver_collection(employee, dn, cod_amount, payment_method):
         "payment_method":  pm_for_child,
         "cash_amount":     cod_amount if pm.startswith("COD") and "ONLINE" not in pm else 0,
         "online_amount":   cod_amount if "ONLINE" in pm else 0,
-        "total_amount":    cod_amount,
+        # The order's value, not the cash collected against it. Storing
+        # cod_amount here meant every prepaid row landed as 0, and the
+        # collection screen reads this column as the order amount.
+        "total_amount":    flt(dn.grand_total),
         "status":          "Delivered",
     })
     col.flags.ignore_permissions = True
