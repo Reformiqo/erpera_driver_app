@@ -335,6 +335,20 @@ def initiate(
                 sub.discrepancy_note = discrepancy_note
         sub.insert(ignore_permissions=True)
 
+        # Set transfer_screenshot
+        uploaded_file = frappe.request.files.get("screenshot_url")
+        if uploaded_file:
+            file_doc = frappe.get_doc({
+                "doctype": "File",
+                "file_name": uploaded_file.filename,
+                "content": uploaded_file.stream.read(),
+                "attached_to_doctype": "Cash Submission",
+                "attached_to_name": sub.name,
+                "is_private": 0,
+            }).insert(ignore_permissions=True)
+
+            sub.db_set("transfer_screenshot", file_doc.file_url, update_modified=False)
+
         log_name = dispatch_otp_v2(
             purpose=PURPOSE_CASH_SUBMISSION,
             reference_doctype="Cash Submission",
@@ -356,7 +370,8 @@ def initiate(
             "next_call":             SPEC_NEXT_CALL,
             # Legacy keys retained so older clients keep working:
             "submission_id":         sub.name,
-            "otp_log":               log_name,
+            # "otp_log":               log_name,
+            "transfer_screenshot":   sub.transfer_screenshot
         })
     except Exception as e:
         return err("INITIATE_SUBMISSION_FAILED", str(e))

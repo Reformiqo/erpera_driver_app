@@ -22,6 +22,9 @@ doc_events = {
         "before_save": "erpera_driver_app.api.wallet.guard_direct_wallet_balance_writes",
         "validate": "erpera_driver_app.api.wallet.guard_direct_wallet_balance_writes",
     },
+    "Delivery Trip": {
+        "validate": "erpera_driver_app.api.delivery_trip.validate"
+    },
 }
 
 # Scheduled Tasks
