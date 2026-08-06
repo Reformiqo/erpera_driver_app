@@ -9,7 +9,8 @@ app_license = "MIT"
 
 # Fixtures — export only custom fields belonging to Erpera Driver App
 fixtures = [
-    {"dt": "Custom Field", "filters": [["module", "=", "Erpera Driver App"]]}
+    {"dt": "Custom Field", "filters": [["module", "=", "Erpera Driver App"]]},
+    {"dt": "Property Setter", "filters": [["module", "=", "Erpera Driver App"]]}
 ]
 
 # Document Events
