@@ -6,3 +6,4 @@
 [pre_model_sync]
 
 [post_model_sync]
+erpera_driver_app.patches.v0_4_9.rename_surat_map_zone_to_offline_map_zone

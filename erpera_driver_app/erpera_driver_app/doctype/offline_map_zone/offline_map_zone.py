@@ -5,5 +5,5 @@
 from frappe.model.document import Document
 
 
-class SuratMapZone(Document):
+class OfflineMapZone(Document):
 	pass

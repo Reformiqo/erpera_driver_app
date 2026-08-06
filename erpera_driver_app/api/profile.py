@@ -12,7 +12,12 @@ from erpera_driver_app.utils.response import err, ok
 
 
 def _surat_map_zones(emp):
-    """Flatten Employee.custom_surat_map_zone into plain rows.
+    """Flatten Employee.custom_surat_map_zone (Offline Map Zone rows) into
+    plain dicts.
+
+    The fieldname and the response key still say "surat" while the doctype is
+    now Offline Map Zone. The fieldname is deliberately left alone — Flutter
+    deserialisers key off it — and the response key follows the fieldname.
 
     The child doctype calls its label field `name1` — `name` is reserved on
     every Frappe doc — so expose it as `name`, which is what it means.
