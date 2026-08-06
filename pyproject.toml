@@ -11,13 +11,12 @@ description = "Erpera Driver App ERP"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.0.1"
-dependencies = [
-    # setuptools 81 removed pkg_resources, which Frappe's bundled dropbox
-    # dep still imports at module load time. Pinning <81 keeps an older
-    # setuptools (with pkg_resources) on the bench's venv so bench migrate
-    # doesn't crash at "Updating DocTypes for frappe".
-    "setuptools<81",
-]
+# No runtime dependencies of its own — the bench supplies frappe and erpnext.
+# Build tooling (setuptools/wheel) is deliberately not pinned here: a pin in an
+# app's dependencies is imposed on every bench that installs it, and forcing a
+# downgrade of setuptools mid-build breaks the build environment. Pin it in the
+# bench's own venv if a bench needs it.
+dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/reformiqo/cowberry_driver_app_erp"
