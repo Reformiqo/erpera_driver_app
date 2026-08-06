@@ -21,15 +21,17 @@
   },
   {
    "fieldname": "center_lat",
-   "fieldtype": "Float",
+   "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Center Lat"
+   "label": "Center Lat",
+   "precision": "9"
   },
   {
    "fieldname": "center_lng",
-   "fieldtype": "Float",
+   "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Center Lng"
+   "label": "Center Lng",
+   "precision": "9"
   },
   {
    "fieldname": "radius_km",
@@ -48,7 +50,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-08-06 16:05:08.050840",
+ "modified": "2026-08-06 19:31:26.708825",
  "modified_by": "Administrator",
  "module": "Erpera Driver App",
  "name": "Offline Map Zone",

@@ -16,6 +16,7 @@ from frappe.utils import flt, now_datetime, today
 
 from erpera_driver_app.api.driver import _require_driver
 from erpera_driver_app.utils.response import err, ok
+from erpera_driver_app.utils.status_timestamps import stamp_completed, timestamp_for
 from erpera_driver_app.utils.trip_sync import mark_stop_visited, trip_for_delivery_note
 
 MAX_PHOTO_BYTES = 5 * 1024 * 1024  # spec: max 5 MB
@@ -146,7 +147,8 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
             "current_day_collected_date":   today(),
         }, update_modified=False)
 
-        update = {
+        update = dict(timestamp_for("Delivered"))
+        update.update({
             "cowberry_delivery_status":  "Delivered",
             "validation_token":          "",          # single-use
             "validation_token_expires_at": None,
@@ -154,7 +156,7 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
             "otp_attempts":              0,
             "otp_validate_attempts":     0,
             "otp_validated":             0,
-        }
+        })
         if gps_lat is not None:
             update["cowberry_delivery_lat"] = gps_lat
         if gps_lng is not None:
@@ -162,6 +164,10 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         if photo_url:
             update["cowberry_proof_image"] = photo_url
         frappe.db.set_value("Delivery Note", delivery_note, update, update_modified=False)
+        # Creating the Sales Invoice above pushes per_billed to 100, which
+        # ERPNext turns into status "Completed" — via db_set, so no doc event
+        # fires and there is nothing to hook. Check for it here instead.
+        stamp_completed(delivery_note)
         frappe.db.commit()
 
         # Tick this DN's stop on the trip so Delivery Trip.status rolls up to
