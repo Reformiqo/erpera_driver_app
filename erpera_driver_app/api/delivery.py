@@ -15,6 +15,7 @@ from erpera_driver_app.utils.exceptions import (
 )
 from erpera_driver_app.utils.geo import validate_coords
 from erpera_driver_app.utils.response import err, ok
+from erpera_driver_app.utils.status_timestamps import stamp_status, timestamp_for
 from erpera_driver_app.utils.trip_sync import mark_stop_visited, sync_trip_status
 
 
@@ -147,6 +148,9 @@ def _do_update_status(delivery_note, target_status, gps_lat=None, gps_lng=None,
         dn.cowberry_delivery_notes = notes
     dn.flags.ignore_permissions = True
     dn.save(ignore_permissions=True)
+    # Written separately from the save: the timestamp columns are
+    # allow_on_submit=0, so setting them on a submitted doc would be rejected.
+    stamp_status(dn.name, target_status)
     frappe.db.commit()
 
     # Delivered can also be reached straight through update_status (the
@@ -284,6 +288,7 @@ def attempt(delivery_note=None, outcome=None, reason_note=None,
             {"delivery_note": delivery_note, "attempt_status": "Attempted"},
         )
         dn_update = {"cowberry_delivery_status": "Attempted"}
+        dn_update.update(timestamp_for("Attempted"))
         # Same rule as _do_update_status: any GPS the driver sends is stamped
         # on the DN, not just buried in the Attempt Log.
         if coords:
