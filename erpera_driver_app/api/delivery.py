@@ -5,6 +5,8 @@ generic transition endpoint; the other five are convenience wrappers that
 call it with the right target status so the Flutter app doesn't have to
 remember the transition map.
 """
+import json
+
 import frappe
 from frappe.utils import flt, getdate, now_datetime, today
 
@@ -23,16 +25,15 @@ from erpera_driver_app.utils.trip_sync import mark_stop_visited, sync_trip_statu
 # no outgoing edges. "Pending" is the implicit starting state when
 # cowberry_delivery_status is null/empty on a freshly submitted DN.
 ALLOWED_TRANSITIONS = {
-    "Pending":         ["Out for Pickup", "Out for Delivery"],
-    "Out for Pickup":  ["Picked Up", "Failed"],
-    "Picked Up":       ["Out for Delivery"],
+    "Pending":          ["Picked Up", "Out for Delivery"],
+    "Picked Up":        ["Out for Delivery", "Failed"],
     "Out for Delivery": ["At Location", "Delivered", "Attempted", "Rescheduled", "Failed"],
-    "At Location":     ["Delivered", "Attempted", "Rescheduled", "Failed"],
-    "Rescheduled":     ["Out for Pickup", "Out for Delivery"],
-    "Attempted":       ["Rescheduled", "Out for Delivery", "Failed"],
-    "Delivered":       [],
-    "Cancelled":       [],
-    "Failed":          [],
+    "At Location":      ["Delivered", "Attempted", "Rescheduled", "Failed"],
+    "Rescheduled":      ["Picked Up", "Out for Delivery"],
+    "Attempted":        ["Rescheduled", "Out for Delivery", "Failed"],
+    "Delivered":        [],
+    "Cancelled":        [],
+    "Failed":           [],
 }
 
 # Spec wording — exactly the strings the Flutter client sends and displays
@@ -205,16 +206,23 @@ def update_status(delivery_note=None, target_status=None, gps_lat=None, gps_lng=
 
 @frappe.whitelist(methods=["POST"])
 def start_pickup(delivery_note=None):
-    """Delivery §2 — Pending → Out for Pickup."""
+    """Delivery §2 — Pending → Picked Up.
+
+    "Out for Pickup" was dropped from the cowberry_delivery_status options, so
+    pickup is now a single step. This endpoint stays because the Flutter URL
+    contract is frozen; it targets the same status confirm_pickup does. The
+    transition is idempotent, so a client still calling start_pickup then
+    confirm_pickup gets a success and `already_in_state` on the second call.
+    """
     try:
-        return _do_update_status(delivery_note, "Out for Pickup")
+        return _do_update_status(delivery_note, "Picked Up")
     except Exception as e:
         return err("START_PICKUP_FAILED", str(e))
 
 
 @frappe.whitelist(methods=["POST"])
 def confirm_pickup(delivery_note=None):
-    """Delivery §3 — Out for Pickup → Picked Up."""
+    """Delivery §3 — Pending → Picked Up (same target as start_pickup)."""
     try:
         return _do_update_status(delivery_note, "Picked Up")
     except Exception as e:
@@ -229,6 +237,134 @@ def mark_arrived(delivery_note=None, gps_lat=None, gps_lng=None):
                                  gps_lat=gps_lat, gps_lng=gps_lng)
     except Exception as e:
         return err("MARK_ARRIVED_FAILED", str(e))
+
+
+# ---------------------------------------------------------------------------
+# Bulk transition — one call for a whole trip's worth of stops
+# ---------------------------------------------------------------------------
+
+def _as_name_list(value):
+    """Accept a delivery-note list however the client sends it.
+
+    A JSON body gives a real list; a query string gives a single string. Both
+    `["DN-1","DN-2"]` and `DN-1,DN-2` are accepted so the endpoint behaves the
+    same from Postman and from Flutter.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        names = list(value)
+    else:
+        text = str(value).strip()
+        if text.startswith("["):
+            try:
+                names = json.loads(text)
+            except ValueError:
+                names = []
+        else:
+            names = text.split(",")
+    # De-duplicate but keep the caller's order, so the response lines up with
+    # what they sent.
+    seen, out = set(), []
+    for n in names:
+        n = str(n).strip()
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+@frappe.whitelist(methods=["POST"])
+def bulk_update_status(delivery_trip=None, delivery_notes=None,
+                       target_status="Picked Up"):
+    """Move several stops on one trip to the same status in a single call.
+
+    A driver loading the van picks up every parcel in one go; making the app
+    fire one request per stop is slow over patchy mobile data and leaves the
+    trip half-transitioned when the connection drops mid-way.
+
+    Body:
+        delivery_trip  — the trip the notes belong to (required)
+        delivery_notes — list of Delivery Note names (required)
+        target_status  — defaults to "Picked Up"
+
+    Each note goes through the same `_do_update_status` the single-stop
+    endpoints use, so ownership checks, the transition map, the Delivery
+    Attempt Log, the status timestamp and the trip roll-up all behave
+    identically — this endpoint adds no rules of its own beyond requiring
+    that every note actually sits on the given trip.
+
+    Partial success is normal and reported per note rather than aborting: one
+    parcel already scanned, or a note that never left "Pending", should not
+    stop the rest of the van from being marked up. Notes already in the
+    target status come back successful with `already_in_state`.
+    """
+    try:
+        _require_driver()
+        if not delivery_trip:
+            return err("VALIDATION_ERROR", "`delivery_trip` is required.", 400)
+        names = _as_name_list(delivery_notes)
+        if not names:
+            return err("VALIDATION_ERROR",
+                       "`delivery_notes` must list at least one Delivery Note.", 400)
+        if not target_status:
+            return err("VALIDATION_ERROR", "`target_status` is required.", 400)
+        if not frappe.db.exists("Delivery Trip", delivery_trip):
+            return err("NOT_FOUND",
+                       f"Delivery Trip '{delivery_trip}' not found.", 404)
+
+        # Every note must be a stop on this trip. Checked up front, in one
+        # query, so a typo'd trip fails loudly instead of silently updating
+        # nothing.
+        on_trip = set(frappe.db.sql_list(
+            """SELECT delivery_note FROM `tabDelivery Stop`
+                WHERE parent = %s AND delivery_note IN %s""",
+            (delivery_trip, tuple(names)),
+        ))
+
+        results = []
+        updated = failed = 0
+        for name in names:
+            if name not in on_trip:
+                results.append({
+                    "delivery_note": name,
+                    "success": False,
+                    "error": {
+                        "code": "NOT_ON_TRIP",
+                        "message": f"'{name}' is not a stop on {delivery_trip}.",
+                    },
+                })
+                failed += 1
+                continue
+
+            res = _do_update_status(name, target_status)
+            if res.get("success"):
+                data = res.get("data") or {}
+                results.append({
+                    "delivery_note":    name,
+                    "success":          True,
+                    "delivery_status":  data.get("delivery_status"),
+                    "already_in_state": bool(data.get("already_in_state")),
+                })
+                updated += 1
+            else:
+                results.append({
+                    "delivery_note": name,
+                    "success":       False,
+                    "error":         res.get("error"),
+                })
+                failed += 1
+
+        return ok(data={
+            "delivery_trip": delivery_trip,
+            "target_status": target_status,
+            "total":         len(names),
+            "updated":       updated,
+            "failed":        failed,
+            "results":       results,
+        })
+    except Exception as e:
+        return err("BULK_UPDATE_STATUS_FAILED", str(e))
 
 
 # ---------------------------------------------------------------------------
