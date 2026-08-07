@@ -15,6 +15,7 @@ import frappe
 from frappe.utils import flt, now_datetime, today
 
 from erpera_driver_app.api.driver import _require_driver
+from erpera_driver_app.utils.cod import expected_cod
 from erpera_driver_app.utils.response import err, ok
 from erpera_driver_app.utils.status_timestamps import stamp_completed, timestamp_for
 from erpera_driver_app.utils.trip_sync import mark_stop_visited, trip_for_delivery_note
@@ -113,7 +114,9 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         is_cod = pay_method.upper().startswith("COD")
         cod_amount = flt(cod_collected_amount) if cod_collected_amount is not None else 0
         if is_cod:
-            expected = flt(dn.grand_total)
+            # rounded_total, not grand_total — cash has no paise. See
+            # erpera_driver_app.utils.cod.
+            expected = expected_cod(dn)
             if abs(cod_amount - expected) > 0.01:
                 return err(
                     "COD_AMOUNT_MISMATCH",

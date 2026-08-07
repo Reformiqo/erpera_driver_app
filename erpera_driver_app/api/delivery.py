@@ -11,6 +11,7 @@ import frappe
 from frappe.utils import flt, getdate, now_datetime, today
 
 from erpera_driver_app.api.driver import _require_driver
+from erpera_driver_app.utils.cod import collected_cod, expected_cod
 from erpera_driver_app.utils.exceptions import (
     DeliveryNoteNotFoundError,
     InvalidStatusTransitionError,
@@ -611,6 +612,9 @@ def history(date=None, payment_type=None, status=None,
                    dn.customer_address,
                    dn.contact_mobile,
                    dn.grand_total,
+                   dn.rounded_total,
+                   dn.cod_amount,
+                   dn.cod_collected_amount,
                    dn.posting_date,
                    dn.cowberry_delivery_status AS delivery_status,
                    dn.set_warehouse,
@@ -652,6 +656,9 @@ def history(date=None, payment_type=None, status=None,
 
             warehouse_name = r.set_warehouse or r.trip_warehouse
             grand_total = flt(r.grand_total)
+            # `amount` is the order's true value; `cod_amount` is the cash the
+            # driver hands over, which rounds to whole rupees.
+            cod_due = expected_cod(r)
             row = {
                 "delivery_note":         r.delivery_note,
                 "trip":                  r.trip,
@@ -662,7 +669,7 @@ def history(date=None, payment_type=None, status=None,
                 "order_stage":           stage,
                 "payment_type":          ptype,
                 "amount":                grand_total,
-                "cod_amount":            grand_total if ptype == "COD" else 0.0,
+                "cod_amount":            cod_due if ptype == "COD" else 0.0,
                 "stop_sequence":         r.stop_sequence,
                 "expected_arrival_time": str(r.estimated_arrival) if r.estimated_arrival else None,
                 "posting_date":          str(r.posting_date) if r.posting_date else None,
@@ -675,9 +682,9 @@ def history(date=None, payment_type=None, status=None,
             elif ptype == "COD":
                 cod_count += 1
                 if stage == "Completed":
-                    cod_collected += grand_total
+                    cod_collected += collected_cod(r)
                 elif stage in ("Pending", "On the way", "Rescheduled"):
-                    cod_pending += grand_total
+                    cod_pending += cod_due
 
         return ok(data={
             "from":             str(from_date),

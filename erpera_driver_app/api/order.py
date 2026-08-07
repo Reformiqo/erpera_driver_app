@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import flt
 
 from erpera_driver_app.api.driver import _require_driver
+from erpera_driver_app.utils.cod import expected_cod
 from erpera_driver_app.utils.exceptions import (
     DeliveryNoteNotFoundError,
     OTPInvalidError,
@@ -62,7 +63,10 @@ def get_order_detail(delivery_note=None):
             _resolve_payment_type, _resolve_expected_arrival, _warehouse_info, _order_stage,
         )
         payment_type = _resolve_payment_type(delivery_note)
-        cod_amount = flt(dn.grand_total) if payment_type == "COD" else 0
+        # The driver must be shown the whole-rupee figure they will actually
+        # collect, or they get blocked by the COD check for handing over an
+        # amount nobody can pay in cash.
+        cod_amount = expected_cod(dn) if payment_type == "COD" else 0
 
         # CD2-I5 Point 3: ETA fallback when stop estimated_arrival is null —
         # derive from the parent trip's departure + stop sequence. Also
@@ -314,7 +318,9 @@ def submit_proof(
         is_cod = payment_type.startswith("COD")
 
         if is_cod:
-            expected = float(dn.get("cod_amount") or dn.grand_total or 0)
+            # Same resolution as pod.submit_proof — these two endpoints
+            # enforce one rule and must not drift apart.
+            expected = expected_cod(dn)
             collected = float(cod_collected_amount or 0)
             if abs(expected - collected) > 0.01:
                 return err(
@@ -573,7 +579,10 @@ def get_history(from_date=None, to_date=None, payment_type=None, limit=50, offse
                 dt.name             AS trip_id,
                 dn.modified AS delivered_at,
                 dn.cowberry_payment_method AS payment_type,
-                dn.grand_total      AS amount
+                dn.grand_total      AS amount,
+                dn.rounded_total    AS rounded_total,
+                dn.cod_amount       AS cod_amount,
+                dn.cod_collected_amount AS cod_collected_amount
             FROM `tabDelivery Note` dn
             JOIN `tabDelivery Stop` ds ON ds.delivery_note = dn.name
             JOIN `tabDelivery Trip` dt ON ds.parent = dt.name
@@ -595,12 +604,20 @@ def get_history(from_date=None, to_date=None, payment_type=None, limit=50, offse
                 prepaid_count += 1
                 prepaid_amount += amount
             else:
+                # Every row here is Delivered, so a COD row's amount is the
+                # cash that changed hands (rounded), not the order value —
+                # otherwise the rows don't add up to cod_amount below.
                 cod_count += 1
+                amount = collected_cod(row)
                 cod_amount += amount
             # Normalise datetime to ISO string for transport.
             if row.get("delivered_at") is not None:
                 row["delivered_at"] = str(row["delivered_at"])
             row["amount"] = amount
+            # These are selected only to resolve the amount above — drop them
+            # so the entries payload keeps the shape Flutter expects.
+            for helper_col in ("rounded_total", "cod_amount", "cod_collected_amount"):
+                row.pop(helper_col, None)
 
         return ok(data={
             "entries": rows,

@@ -1,6 +1,6 @@
 {
  "actions": [],
- "creation": "2024-01-01 00:00:00.000000",
+ "creation": "2024-01-01 00:00:00",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -15,24 +15,78 @@
   "status"
  ],
  "fields": [
-  {"fieldname": "delivery_note", "fieldtype": "Link", "label": "Delivery Note", "options": "Delivery Note", "reqd": 1},
-  {"fieldname": "customer", "fieldtype": "Link", "label": "Customer", "options": "Customer"},
-  {"fieldname": "customer_name", "fieldtype": "Data", "label": "Customer Name", "fetch_from": "customer.customer_name"},
-  {"fieldname": "payment_method", "fieldtype": "Select", "label": "Payment Method", "options": "Cash\nCOD-Online\nWallet\nPrepaid"},
-  {"fieldname": "cash_amount", "fieldtype": "Currency", "label": "Cash Amount", "default": "0"},
-  {"fieldname": "online_amount", "fieldtype": "Currency", "label": "Online Amount", "default": "0"},
-  {"fieldname": "wallet_amount", "fieldtype": "Currency", "label": "Wallet Amount", "default": "0"},
-  {"fieldname": "total_amount", "fieldtype": "Currency", "label": "Total Amount", "default": "0"},
-  {"fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Pending\nDelivered\nFailed\nRescheduled"}
+  {
+   "fieldname": "delivery_note",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Delivery Note",
+   "options": "Delivery Note",
+   "reqd": 1
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "options": "Customer"
+  },
+  {
+   "fetch_from": "customer.customer_name",
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "label": "Customer Name"
+  },
+  {
+   "fieldname": "payment_method",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Payment Method",
+   "options": "Cash\nCOD-Online\nWallet\nPrepaid"
+  },
+  {
+   "default": "0",
+   "fieldname": "cash_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Cash Amount"
+  },
+  {
+   "default": "0",
+   "fieldname": "online_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Online Amount"
+  },
+  {
+   "default": "0",
+   "fieldname": "wallet_amount",
+   "fieldtype": "Currency",
+   "label": "Wallet Amount"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Total Amount"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Pending\nDelivered\nFailed\nRescheduled"
+  }
  ],
  "istable": 1,
  "links": [],
- "modified": "2024-01-01 00:00:00.000000",
+ "modified": "2026-08-07 15:00:48.428632",
  "modified_by": "Administrator",
  "module": "Erpera Driver App",
  "name": "CCD Order Item",
  "owner": "Administrator",
  "permissions": [],
+ "row_format": "Dynamic",
  "sort_field": "modified",
- "sort_order": "DESC"
+ "sort_order": "DESC",
+ "states": []
 }

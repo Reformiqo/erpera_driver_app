@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import add_days, flt, get_datetime, getdate, today
 
 from erpera_driver_app.api.driver import _require_driver
+from erpera_driver_app.utils.cod import collected_cod
 from erpera_driver_app.utils.response import err, ok
 
 
@@ -35,6 +36,9 @@ def _driver_dn_rows(driver, d_from, d_to):
                dn.cowberry_delivery_status    AS delivery_status,
                dn.cowberry_payment_method     AS payment_method,
                dn.grand_total                 AS grand_total,
+               dn.rounded_total               AS rounded_total,
+               dn.cod_amount                  AS cod_amount,
+               dn.cod_collected_amount        AS cod_collected_amount,
                dn.modified                    AS delivered_at,
                dn.customer_name               AS customer_name,
                ds.estimated_arrival           AS expected_arrival,
@@ -69,7 +73,8 @@ def _summarise(rows):
         if status == "Delivered":
             delivered += 1
             if (r.payment_method or "").upper().startswith("COD"):
-                cod_collected += flt(r.grand_total)
+                # Cash actually taken, not order value — see utils.cod.
+                cod_collected += collected_cod(r)
             if r.expected_arrival and r.delivered_at:
                 delta_mins = (r.delivered_at - r.expected_arrival).total_seconds() / 60
                 if delta_mins <= 0:
@@ -114,6 +119,9 @@ def _fleet_summary(d_from, d_to):
         SELECT dn.cowberry_delivery_status    AS delivery_status,
                dn.cowberry_payment_method     AS payment_method,
                dn.grand_total                 AS grand_total,
+               dn.rounded_total               AS rounded_total,
+               dn.cod_amount                  AS cod_amount,
+               dn.cod_collected_amount        AS cod_collected_amount,
                dn.modified                    AS delivered_at,
                ds.estimated_arrival           AS expected_arrival
           FROM `tabDelivery Trip` dt
@@ -368,8 +376,10 @@ def _daily_cod_history(dn_rows, d_from, d_to):
         d = getdate(r.delivered_at)
         for b in buckets:
             if b["start"] <= d <= b["end"]:
-                b["amount"] += flt(r.grand_total)
-                total += flt(r.grand_total)
+                # COD cash trend — actual cash, consistent with _summarise.
+                collected = collected_cod(r)
+                b["amount"] += collected
+                total += collected
                 break
 
     return {

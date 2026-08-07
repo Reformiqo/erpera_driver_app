@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import flt, getdate, now_datetime, today
 
 from erpera_driver_app.api.driver import _require_driver
+from erpera_driver_app.utils.cod import collected_cod, expected_cod
 from erpera_driver_app.utils.geo import haversine_m, validate_coords
 from erpera_driver_app.utils.response import err, ok
 
@@ -203,7 +204,10 @@ def _aggregate_trip_stats(trip_name):
         SELECT ds.delivery_note,
                ds.visited,
                dn.cowberry_delivery_status   AS delivery_status,
-               dn.grand_total                AS grand_total
+               dn.grand_total                AS grand_total,
+               dn.rounded_total              AS rounded_total,
+               dn.cod_amount                 AS cod_amount,
+               dn.cod_collected_amount       AS cod_collected_amount
           FROM `tabDelivery Stop` ds
           LEFT JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
          WHERE ds.parent = %s
@@ -228,9 +232,11 @@ def _aggregate_trip_stats(trip_name):
         ptype = _resolve_payment_type(r.delivery_note)
         if ptype == "COD":
             cod_count += 1
-            cod_expected += flt(r.grand_total)
+            cod_expected += expected_cod(r)
             if r.delivery_status == "Delivered":
-                cod_collected += flt(r.grand_total)
+                # Physical cash in hand, not order value — after rounding the
+                # two differ and only this one reconciles against the driver.
+                cod_collected += collected_cod(r)
         else:
             prepaid_count += 1
     return {
@@ -441,6 +447,8 @@ def get_orders(trip=None, status="All"):
                    dn.contact_mobile                        AS contact_mobile,
                    IFNULL(dn.cowberry_delivery_status,'Pending') AS delivery_status,
                    dn.grand_total                           AS grand_total,
+                   dn.rounded_total                         AS rounded_total,
+                   dn.cod_amount                            AS cod_amount,
                    dn.set_warehouse                         AS warehouse_name,
                    ds.idx                                   AS stop_sequence,
                    ds.estimated_arrival                     AS expected_arrival_time,
@@ -495,7 +503,7 @@ def get_orders(trip=None, status="All"):
                 # CD2-I5 Point 2: per-order stage label (Completed / On the way / Pending)
                 "order_stage":           _order_stage(r.delivery_status),
                 "payment_type":          payment_type,
-                "cod_amount":            (flt(r.grand_total) if payment_type == "COD" else 0),
+                "cod_amount":            (expected_cod(r) if payment_type == "COD" else 0),
                 "stop_sequence":         r.stop_sequence,
                 "expected_arrival_time": str(eta) if eta else None,
                 "items_count":           r.items_count,

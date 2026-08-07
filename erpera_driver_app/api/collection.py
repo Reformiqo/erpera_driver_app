@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import add_days, cint, flt, getdate, today
 
 from erpera_driver_app.api.driver import _require_driver
+from erpera_driver_app.utils.cod import collected_cod, expected_cod
 from erpera_driver_app.utils.exceptions import CollectionAlreadySubmittedError
 from erpera_driver_app.utils.response import err, ok
 
@@ -94,90 +95,137 @@ def get_screen(date=None):
         prepaid_settled = cod_collected = cod_pending = 0
         cod_orders_completed = 0
 
+        from erpera_driver_app.api.trip import _driver_record, _resolve_payment_type
+
+        # ── PREVIOUS BEHAVIOUR — kept commented so it can be restored ───────
+        # The screen used to read EITHER the Driver Collection's rows OR the
+        # day's trips, never both:
+        #
+        #     if col_name:
+        #         for row in (col.get("order_breakdown") or []):
+        #             ...                      # settled orders only
+        #     else:
+        #         <the trips query below>      # every order, pending included
+        #
+        # A CCD Order Item row is only written by pod.submit_proof, i.e. at
+        # delivery. So the moment the driver's first parcel landed, a
+        # collection appeared, the code switched branches, and every
+        # still-pending order dropped off the screen. cod_pending could not be
+        # anything but zero on that branch either, since every row it read was
+        # Delivered by construction.
+        #
+        # To go back: delete the merge below and restore the if/else above.
+        # ───────────────────────────────────────────────────────────────────
+
+        # Collection rows keyed by Delivery Note — the settled side of the day.
+        collected_rows = {}
         if col_name:
-            from erpera_driver_app.api.trip import _resolve_payment_type
             col = frappe.get_doc("Driver Collection", col_name)
             for row in (col.get("order_breakdown") or []):
-                amt = flt(row.get("total_amount") or 0)
-                cash_amt = flt(row.get("cash_amount") or 0)
-                online_amt = flt(row.get("online_amount") or 0)
-                ptype = (row.get("payment_method") or "")
-                dn_name = row.get("delivery_note")
-                # Rows written before total_amount held the order value carry
-                # a 0 here — read it off the Delivery Note instead so existing
-                # collections show real amounts without a data migration.
-                if not amt and dn_name:
-                    amt = flt(frappe.db.get_value("Delivery Note", dn_name, "grand_total") or 0)
-                # Same for the payment method: rows stamped from a DN whose
-                # method field was empty came out "Prepaid". Re-resolve.
-                if not ptype and dn_name:
-                    ptype = _resolve_payment_type(dn_name)
-                # Treat Cash/COD-* as COD, anything else as Prepaid
-                is_cod = ptype.upper().startswith("CASH") or "COD" in ptype.upper()
-                # Prepaid orders are paid at checkout — delivering one settles
-                # it. Only COD needs the cash to actually add up. The old rule
-                # demanded collected >= amount for both, so every prepaid row
-                # showed "Pending" forever.
-                delivered = (row.get("status") == "Delivered")
-                if is_cod:
-                    settled = delivered and amt > 0 and (cash_amt + online_amt) >= amt
+                if row.get("delivery_note"):
+                    collected_rows[row.get("delivery_note")] = row
+
+        # The day's stops are the authoritative list of what the driver is
+        # carrying, settled or not. Everything is shown; the collection only
+        # supplies the settled detail on top.
+        drv = _driver_record(employee)
+        trip_rows = frappe.db.sql(
+            """SELECT dn.name AS delivery_note,
+                      IFNULL(dn.customer_name, dn.customer) AS customer,
+                      dn.grand_total,
+                      dn.rounded_total,
+                      dn.cod_amount,
+                      dn.cod_collected_amount,
+                      IFNULL(dn.cowberry_delivery_status,'Pending') AS dstatus
+                 FROM `tabDelivery Stop` ds
+                 JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
+                 JOIN `tabDelivery Trip`  dt ON dt.name = ds.parent
+                WHERE dt.driver = %s AND DATE(dt.departure_time) = %s""",
+            (drv, target), as_dict=True,
+        ) if drv else []
+
+        def _add(dn_name, customer, amt, ptype, settled):
+            """Append one order row and fold it into the day's totals."""
+            # Treat Cash/COD-* as COD, anything else as Prepaid.
+            is_cod = ptype.upper().startswith("CASH") or "COD" in ptype.upper()
+            order_breakdown.append({
+                "customer":      customer,
+                "delivery_note": dn_name,
+                "payment_type":  "COD" if is_cod else "Prepaid",
+                "amount":        amt,
+                "status":        "Settled" if settled else "Pending",
+            })
+            nonlocal prepaid_settled, cod_collected, cod_pending, cod_orders_completed
+            if is_cod:
+                if settled:
+                    cod_collected += amt
+                    cod_orders_completed += 1
                 else:
-                    settled = delivered
-                status = "Settled" if settled else "Pending"
-                order_breakdown.append({
-                    "customer":     row.get("customer_name") or row.get("customer"),
-                    "delivery_note": row.get("delivery_note"),
-                    "payment_type": "COD" if is_cod else "Prepaid",
-                    "amount":       amt,
-                    "status":       status,
-                })
-                if is_cod:
-                    if status == "Settled":
-                        cod_collected += amt
-                        cod_orders_completed += 1
-                    else:
-                        cod_pending += amt
-                else:
-                    if status == "Settled":
-                        prepaid_settled += amt
-        # If no Driver Collection exists yet, fall back to today's
-        # delivered DNs assigned to this driver's trips so the screen
-        # doesn't render empty for the in-progress case.
-        else:
-            from erpera_driver_app.api.trip import _driver_record, _resolve_payment_type
-            drv = _driver_record(employee)
-            if drv:
-                rows = frappe.db.sql(
-                    """SELECT dn.name AS delivery_note,
-                              IFNULL(dn.customer_name, dn.customer) AS customer,
-                              dn.grand_total,
-                              IFNULL(dn.cowberry_delivery_status,'Pending') AS dstatus
-                         FROM `tabDelivery Stop` ds
-                         JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
-                         JOIN `tabDelivery Trip`  dt ON dt.name = ds.parent
-                        WHERE dt.driver = %s AND DATE(dt.departure_time) = %s""",
-                    (drv, target), as_dict=True,
-                )
-                for r in rows:
-                    ptype = _resolve_payment_type(r.delivery_note)
-                    amt = flt(r.grand_total)
-                    settled = r.dstatus == "Delivered"
-                    order_breakdown.append({
-                        "customer":     r.customer,
-                        "delivery_note": r.delivery_note,
-                        "payment_type": ptype,
-                        "amount":       amt,
-                        "status":       "Settled" if settled else "Pending",
-                    })
-                    if ptype == "COD":
-                        if settled:
-                            cod_collected += amt
-                            cod_orders_completed += 1
-                        else:
-                            cod_pending += amt
-                    else:
-                        if settled:
-                            prepaid_settled += amt
+                    cod_pending += amt
+            elif settled:
+                prepaid_settled += amt
+
+        def _from_collection_row(row, dn_name):
+            """(amount, payment_type, settled) for an order already collected."""
+            amt = flt(row.get("total_amount") or 0)
+            # Rows written before total_amount held the order value carry a 0
+            # here — read it off the Delivery Note instead so existing
+            # collections show real amounts without a data migration.
+            if not amt:
+                dn_row = frappe.db.get_value(
+                    "Delivery Note", dn_name,
+                    ["cod_amount", "rounded_total", "grand_total"], as_dict=True) or {}
+                amt = expected_cod(dn_row)
+            ptype = row.get("payment_method") or ""
+            # Same for the payment method: rows stamped from a DN whose method
+            # field was empty came out "Prepaid". Re-resolve.
+            if not ptype:
+                ptype = _resolve_payment_type(dn_name)
+            is_cod = ptype.upper().startswith("CASH") or "COD" in ptype.upper()
+            delivered = (row.get("status") == "Delivered")
+            # Prepaid is paid at checkout, so delivering settles it. Only COD
+            # needs the cash to actually add up.
+            if is_cod:
+                collected = flt(row.get("cash_amount") or 0) + flt(row.get("online_amount") or 0)
+                settled = delivered and amt > 0 and collected >= amt
+                # Report the rounded cash the driver actually holds, not the
+                # paise-exact order value. cod_collected feeds
+                # available_to_submit, which cash_submission.initiate then
+                # reconciles against Driver Collection.total_cash — those two
+                # have to be the same number.
+                if settled and collected:
+                    amt = collected
+            else:
+                settled = delivered
+            return amt, ptype, settled
+
+        # A Delivery Note can sit on two stops (or two trips) in one day;
+        # counting it twice would double the cash the driver appears to hold.
+        seen = set()
+        for r in trip_rows:
+            if r.delivery_note in seen:
+                continue
+            seen.add(r.delivery_note)
+            row = collected_rows.get(r.delivery_note)
+            if row:
+                amt, ptype, settled = _from_collection_row(row, r.delivery_note)
+            else:
+                settled = r.dstatus == "Delivered"
+                # Delivered means cash in hand; pending means cash still due.
+                amt = collected_cod(r) if settled else expected_cod(r)
+                ptype = _resolve_payment_type(r.delivery_note)
+            _add(r.delivery_note, r.customer, amt, ptype, settled)
+
+        # Anything collected today whose trip departed on another date — a late
+        # evening trip delivered after midnight, say. Without this the cash
+        # would be missing from a screen that is meant to reconcile it.
+        for dn_name, row in collected_rows.items():
+            if dn_name in seen:
+                continue
+            seen.add(dn_name)
+            amt, ptype, settled = _from_collection_row(row, dn_name)
+            _add(dn_name, row.get("customer_name") or row.get("customer"),
+                 amt, ptype, settled)
 
         total_expected = prepaid_settled + cod_collected + cod_pending
 
