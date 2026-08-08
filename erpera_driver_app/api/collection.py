@@ -43,7 +43,11 @@ def get_screen(date=None):
         },
         "order_breakdown": [
             { "customer", "delivery_note", "payment_type", "amount",
-              "status" }   # status: "Settled" / "Pending"
+              "status" }
+            # status: "Pending"   — not delivered yet
+            #         "Collected" — COD delivered, cash still on the driver
+            #         "Settled"   — cash handed to the warehouse manager
+            #                       (prepaid is Settled as soon as delivered)
         ],
         "submission": {                # populated only when ready to submit
             "available_to_submit": <int>,
@@ -117,13 +121,26 @@ def get_screen(date=None):
         # To go back: delete the merge below and restore the if/else above.
         # ───────────────────────────────────────────────────────────────────
 
-        # Collection rows keyed by Delivery Note — the settled side of the day.
+        # Collection rows keyed by Delivery Note — the delivered side of the day.
         collected_rows = {}
+        # Has the day's cash actually reached the warehouse manager? A
+        # submitted (docstatus=1) Cash Submission is the money event itself;
+        # Cash Submission.on_submit is what flips the collection to
+        # "Submitted", so the flag is only ever a mirror of it. Reading both
+        # keeps this right if someone closes a collection from the desk.
+        cash_submitted = False
+        already_submitted = 0.0
         if col_name:
             col = frappe.get_doc("Driver Collection", col_name)
             for row in (col.get("order_breakdown") or []):
                 if row.get("delivery_note"):
                     collected_rows[row.get("delivery_note")] = row
+            already_submitted = flt(frappe.db.sql(
+                """SELECT COALESCE(SUM(amount), 0) FROM `tabCash Submission`
+                    WHERE collection = %s AND docstatus = 1""",
+                (col_name,))[0][0])
+            cash_submitted = bool(already_submitted) or \
+                col.get("status") in ("Closed", "Submitted")
 
         # The day's stops are the authoritative list of what the driver is
         # carrying, settled or not. Everything is shown; the collection only
@@ -144,25 +161,46 @@ def get_screen(date=None):
             (drv, target), as_dict=True,
         ) if drv else []
 
-        def _add(dn_name, customer, amt, ptype, settled):
-            """Append one order row and fold it into the day's totals."""
+        def _add(dn_name, customer, amt, ptype, cash_taken):
+            """Append one order row and fold it into the day's totals.
+
+            `cash_taken` means the order is delivered and, for COD, the money
+            was actually collected.
+
+            Three states, not two — the driver app needs to tell "money in my
+            pocket" apart from "money handed in":
+
+              Pending   — not delivered yet, nothing collected
+              Collected — COD delivered, cash still on the driver
+              Settled   — cash handed to the warehouse manager
+
+            Prepaid goes straight to Settled: it was paid at checkout, the
+            driver never holds it, and no cash submission will ever cover it.
+            Requiring one would leave prepaid rows stuck on Collected forever.
+            """
             # Treat Cash/COD-* as COD, anything else as Prepaid.
             is_cod = ptype.upper().startswith("CASH") or "COD" in ptype.upper()
+            if not cash_taken:
+                status = "Pending"
+            elif not is_cod or cash_submitted:
+                status = "Settled"
+            else:
+                status = "Collected"
             order_breakdown.append({
                 "customer":      customer,
                 "delivery_note": dn_name,
                 "payment_type":  "COD" if is_cod else "Prepaid",
                 "amount":        amt,
-                "status":        "Settled" if settled else "Pending",
+                "status":        status,
             })
             nonlocal prepaid_settled, cod_collected, cod_pending, cod_orders_completed
             if is_cod:
-                if settled:
+                if cash_taken:
                     cod_collected += amt
                     cod_orders_completed += 1
                 else:
                     cod_pending += amt
-            elif settled:
+            elif cash_taken:
                 prepaid_settled += amt
 
         def _from_collection_row(row, dn_name):
@@ -233,7 +271,11 @@ def get_screen(date=None):
         # Only populated when there's actually something to submit. Real
         # WM OTP wiring is in api/cash_submission.py; here we surface a
         # state hint so the screen can render the right CTA.
-        available_to_submit = cod_collected   # what's physically in hand
+        # Cash still on the driver: collected today minus what has already
+        # gone to the warehouse manager. Reading cod_collected straight off
+        # meant the screen kept asking for money that had been handed in, and
+        # contradicted running_cash_total, which validate_otp resets to 0.
+        available_to_submit = max(cod_collected - already_submitted, 0)
         existing_sub = frappe.db.get_value(
             "Cash Submission",
             {"driver": employee, "docstatus": 0,
@@ -280,8 +322,12 @@ def get_screen(date=None):
             "totals": {
                 "total_expected":  total_expected,
                 "prepaid_settled": prepaid_settled,
+                # Everything COD delivered today — meaning unchanged.
                 "cod_collected":   cod_collected,
                 "cod_pending":     cod_pending,
+                # Of cod_collected, how much has reached the warehouse
+                # manager. Additive: existing keys keep their meaning.
+                "cod_submitted":   already_submitted,
             },
             "order_breakdown":     order_breakdown,
             "submission":          submission,
