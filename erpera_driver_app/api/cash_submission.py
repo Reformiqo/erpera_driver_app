@@ -471,7 +471,7 @@ def history(date=None, limit=20, offset=0):
               FROM `tabCash Submission` cs
               LEFT JOIN `tabDriver Collection` dc ON dc.name = cs.collection
              WHERE cs.driver = %(emp)s
-               {date_clause}
+               {date_clause} AND cs.docstatus = 1
              ORDER BY cs.creation DESC
              LIMIT %(limit)s OFFSET %(offset)s
             """.format(
