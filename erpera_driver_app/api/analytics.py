@@ -2,6 +2,11 @@ import frappe
 from frappe.utils import add_days, flt, get_datetime, getdate, today
 
 from erpera_driver_app.api.driver import _require_driver
+from erpera_driver_app.api.trip import (
+    delivered_at_sql,
+    payment_columns,
+    payment_type_from_row,
+)
 from erpera_driver_app.utils.cod import collected_cod
 from erpera_driver_app.utils.response import err, ok
 
@@ -15,40 +20,81 @@ SCORE_WEIGHTS = {
     "comms_weight":   0.1,
 }
 
+# A stop counts towards success/reschedule rates once the driver has actually
+# worked it. "Pending" is work not yet done, not work done badly — leaving it
+# in the denominator made every in-progress trip look like a failing one.
+ATTEMPTED_STATUSES = {"Delivered", "Failed", "Returned", "Rescheduled"}
+FAILED_STATUSES = {"Failed", "Returned"}
+
+
+def _num(value, default=0):
+    """Coerce a not-measurable metric to a number for the wire.
+
+    The section builders carry `None` for "couldn't be measured" so the
+    composite can drop that component instead of scoring it zero. The JSON
+    keys stay numeric, because released Flutter builds format them directly;
+    the matching `*_measurable` flag is what tells the client to render a dash.
+    """
+    return default if value is None else value
+
 
 # ---------------------------------------------------------------------------
 # Shared driver-scoped query helpers — used by every section builder.
 # ---------------------------------------------------------------------------
 
+def _dedupe_by_delivery_note(rows):
+    """One row per Delivery Note, keeping the most recent trip's stop.
+
+    A Delivery Note can sit on more than one Delivery Stop — re-added to the
+    same trip, or moved to a later trip after a failed attempt — and the
+    three-table join returns it once per stop. Counting those rows straight
+    made a single delivery register as two: deliveries, COD collected and the
+    success denominator all inflated together, which is how a 30-day window
+    reported more completed deliveries than the site had Delivered notes in
+    total.
+
+    Rows arrive ordered by departure_time ASC, so overwriting on each hit
+    leaves the latest trip's stop — the one whose ETA the delivery was
+    actually judged against.
+    """
+    by_dn = {}
+    for r in rows:
+        by_dn[r.delivery_note] = r
+    return list(by_dn.values())
+
+
 def _driver_dn_rows(driver, d_from, d_to):
     """Every Delivery Note reachable through the driver's trips in the
-    window. Returns per-row: delivery_note, delivery_status,
-    payment_method, grand_total, delivered_at, expected_arrival,
-    trip, departure_time, stop_idx, customer_name.
+    window, one row per note. Returns per-row: delivery_note,
+    delivery_status, payment_type, grand_total, delivered_at,
+    expected_arrival, trip, departure_time, stop_idx, customer_name.
 
     Filter uses trip departure/creation (same rule as delivery.history)
     so ranking + windowing stay consistent across screens."""
     if not driver:
         return []
-    return frappe.db.sql(
-        """
+    pay_cols = payment_columns()
+    pay_select = "".join(f", dn.`{c}` AS `{c}`" for c in pay_cols)
+    rows = frappe.db.sql(
+        f"""
         SELECT dn.name                        AS delivery_note,
                dn.cowberry_delivery_status    AS delivery_status,
-               dn.cowberry_payment_method     AS payment_method,
                dn.grand_total                 AS grand_total,
                dn.rounded_total               AS rounded_total,
                dn.cod_amount                  AS cod_amount,
                dn.cod_collected_amount        AS cod_collected_amount,
-               dn.modified                    AS delivered_at,
+               {delivered_at_sql()}           AS delivered_at,
                dn.customer_name               AS customer_name,
                ds.estimated_arrival           AS expected_arrival,
                ds.idx                         AS stop_idx,
                dt.name                        AS trip,
                dt.departure_time              AS departure_time
+               {pay_select}
           FROM `tabDelivery Trip` dt
           JOIN `tabDelivery Stop` ds ON ds.parent = dt.name
           JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
          WHERE dt.driver = %(driver)s
+           AND dn.docstatus = 1
            AND (
                  (DATE(dt.departure_time) BETWEEN %(d_from)s AND %(d_to)s)
               OR (dt.departure_time IS NULL
@@ -59,84 +105,172 @@ def _driver_dn_rows(driver, d_from, d_to):
         {"driver": driver, "d_from": d_from, "d_to": d_to},
         as_dict=True,
     )
+    for r in rows:
+        # Resolved once here so every section agrees, and so a payment method
+        # parked in `payment_type` or `delhivery_payment_mode` still reads as
+        # COD — reading only `cowberry_payment_method` dropped those orders
+        # out of the COD total entirely. Deliberately not called `payment_type`:
+        # that is itself one of the source columns selected above.
+        r["pay_type"] = payment_type_from_row(r, pay_cols)
+    return _dedupe_by_delivery_note(rows)
 
 
 def _summarise(rows):
     """Common counters used by performance_score + key_metrics + vs_fleet.
-    Kept as a single pass so we don't re-scan the row set per section."""
+    Kept as a single pass so we don't re-scan the row set per section.
+
+    Rates are `None` when the underlying data cannot support them — no
+    attempted stops, or no stop with both an ETA and a delivery time. Callers
+    put a number on the wire via `_num()` and ship a `*_measurable` flag
+    beside it; the composite drops the component entirely rather than
+    scoring it zero, because "we could not measure this" and "the driver
+    scored zero on this" are not the same statement.
+    """
     total = len(rows)
-    delivered = failed = rescheduled = on_time = 0
+    attempted = delivered = failed = rescheduled = on_time = 0
+    cod_orders = 0
     cod_collected = 0.0
-    delays = []  # positive minute deltas for delivered rows only
+    delays = []     # positive minute deltas for delivered rows only
+    comparable = 0  # delivered rows where punctuality could actually be judged
     for r in rows:
         status = (r.delivery_status or "").strip()
+        is_cod = (r.get("pay_type") or "") == "COD"
+        if is_cod:
+            cod_orders += 1
+        if status in ATTEMPTED_STATUSES:
+            attempted += 1
         if status == "Delivered":
             delivered += 1
-            if (r.payment_method or "").upper().startswith("COD"):
+            if is_cod:
                 # Cash actually taken, not order value — see utils.cod.
                 cod_collected += collected_cod(r)
             if r.expected_arrival and r.delivered_at:
+                comparable += 1
                 delta_mins = (r.delivered_at - r.expected_arrival).total_seconds() / 60
                 if delta_mins <= 0:
                     on_time += 1
                 else:
                     delays.append(delta_mins)
-        elif status in ("Failed", "Returned"):
+        elif status in FAILED_STATUSES:
             failed += 1
         elif status == "Rescheduled":
             rescheduled += 1
 
-    success_rate = round((delivered / total) * 100, 1) if total else 0.0
-    on_time_rate = round((on_time / delivered) * 100, 1) if delivered else 0.0
-    reschedule_rate = round((rescheduled / total) * 100, 1) if total else 0.0
-    avg_delay = round(sum(delays) / len(delays), 1) if delays else 0.0
-    composite = round(
-        on_time_rate * SCORE_WEIGHTS["on_time_weight"]
-        + success_rate * SCORE_WEIGHTS["success_weight"]
-        + (100 if cod_collected > 0 else 0) * SCORE_WEIGHTS["cod_weight"]
-        + success_rate * SCORE_WEIGHTS["comms_weight"]
-    )
+    success_rate = round((delivered / attempted) * 100, 1) if attempted else None
+    # Denominator is the stops that could be judged, not every delivered stop.
+    # Delivery Stop.estimated_arrival is filled by ERPNext's route pass, which
+    # needs a Maps key; where it is blank the old denominator counted the stop
+    # as late and pinned the rate at 0%.
+    on_time_rate = round((on_time / comparable) * 100, 1) if comparable else None
+    reschedule_rate = round((rescheduled / attempted) * 100, 1) if attempted else None
+    avg_delay = round(sum(delays) / len(delays), 1) if delays else None
+    # COD stays the spec's binary "did any cash come in" signal, but a driver
+    # who was never given a COD order is not scored on it.
+    cod_component = None if not cod_orders else (100.0 if cod_collected > 0 else 0.0)
+
     return {
         "total":           total,
+        "attempted":       attempted,
         "delivered":       delivered,
         "failed":          failed,
         "rescheduled":     rescheduled,
         "on_time":         on_time,
+        "comparable":      comparable,
+        "cod_orders":      cod_orders,
         "cod_collected":   cod_collected,
         "delays":          delays,
         "success_rate":    success_rate,
         "on_time_rate":    on_time_rate,
         "reschedule_rate": reschedule_rate,
         "avg_delay":       avg_delay,
-        "composite":       composite,
+        "cod_component":   cod_component,
+        "composite":       _composite(success_rate, on_time_rate, cod_component),
+        "coverage":        _coverage(success_rate, on_time_rate, cod_component),
     }
 
 
+def _score_parts(success_rate, on_time_rate, cod_component):
+    """(value, weight) for each scorecard component that has a real signal.
+
+    `comms` is absent by design: nothing on this site records driver-to-
+    customer contact yet. It used to be filled with a second copy of
+    success_rate, which quietly gave success 40% of the score instead of 30%.
+    """
+    return [
+        (on_time_rate,   SCORE_WEIGHTS["on_time_weight"]),
+        (success_rate,   SCORE_WEIGHTS["success_weight"]),
+        (cod_component,  SCORE_WEIGHTS["cod_weight"]),
+        (None,           SCORE_WEIGHTS["comms_weight"]),   # comms — no source
+    ]
+
+
+def _composite(success_rate, on_time_rate, cod_component):
+    """Weighted score over the components that could be measured.
+
+    Weights are re-normalised across those components, so an unmeasurable one
+    neither drags the score down nor silently counts as full marks.
+    """
+    live = [(v, w) for v, w in _score_parts(success_rate, on_time_rate, cod_component)
+            if v is not None]
+    live_weight = sum(w for _, w in live)
+    if not live_weight:
+        return 0
+    return round(sum(v * w for v, w in live) / live_weight)
+
+
+def _coverage(success_rate, on_time_rate, cod_component):
+    """How much of the designed scorecard the composite actually rests on.
+
+    100 means every component had data. The Flutter gauge should caption the
+    score with this — a 96 built on half the scorecard is not a 96.
+    """
+    parts = _score_parts(success_rate, on_time_rate, cod_component)
+    live = sum(w for v, w in parts if v is not None)
+    return round(live / sum(w for _, w in parts) * 100, 1)
+
+
 def _fleet_summary(d_from, d_to):
-    """Fleet-wide summary across ALL drivers in the window."""
+    """Fleet-wide summary across ALL drivers in the window.
+
+    Also reports how many drivers the average is built from: when that is 1
+    the "fleet" is the driver themselves, and the comparison on the dashboard
+    means nothing — the client needs to be able to hide it.
+    """
+    pay_cols = payment_columns()
+    pay_select = "".join(f", dn.`{c}` AS `{c}`" for c in pay_cols)
     rows = frappe.db.sql(
-        """
-        SELECT dn.cowberry_delivery_status    AS delivery_status,
-               dn.cowberry_payment_method     AS payment_method,
+        f"""
+        SELECT dn.name                        AS delivery_note,
+               dn.cowberry_delivery_status    AS delivery_status,
                dn.grand_total                 AS grand_total,
                dn.rounded_total               AS rounded_total,
                dn.cod_amount                  AS cod_amount,
                dn.cod_collected_amount        AS cod_collected_amount,
-               dn.modified                    AS delivered_at,
-               ds.estimated_arrival           AS expected_arrival
+               {delivered_at_sql()}           AS delivered_at,
+               ds.estimated_arrival           AS expected_arrival,
+               dt.departure_time              AS departure_time,
+               dt.driver                      AS driver
+               {pay_select}
           FROM `tabDelivery Trip` dt
           JOIN `tabDelivery Stop` ds ON ds.parent = dt.name
           JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
-         WHERE (
+         WHERE dn.docstatus = 1
+           AND (
                  (DATE(dt.departure_time) BETWEEN %(d_from)s AND %(d_to)s)
               OR (dt.departure_time IS NULL
                   AND DATE(dt.creation) BETWEEN %(d_from)s AND %(d_to)s)
            )
+         ORDER BY dt.departure_time ASC
         """,
         {"d_from": d_from, "d_to": d_to},
         as_dict=True,
     )
-    return _summarise(rows)
+    for r in rows:
+        r["pay_type"] = payment_type_from_row(r, pay_cols)
+    drivers = {r.driver for r in rows if r.driver}
+    summary = _summarise(_dedupe_by_delivery_note(rows))
+    summary["driver_count"] = len(drivers)
+    return summary
 
 
 def _wallet_topups(employee, d_from, d_to):
@@ -229,54 +363,102 @@ def get_screen(period="month", **kwargs):
 # ---------------------------------------------------------------------------
 
 def _performance_score(summary, prev, fleet):
-    """Section 1 — Performance Score gauge + components."""
-    delta = summary["composite"] - prev["composite"]
-    if delta > 0.5:
-        delta_label = f"Up {round(delta, 1)} vs last period"
-    elif delta < -0.5:
-        delta_label = f"Down {abs(round(delta, 1))} vs last period"
-    else:
-        delta_label = "Flat vs last period"
+    """Section 1 — Performance Score gauge + components.
 
-    fleet_delta = summary["composite"] - fleet["composite"]
-    if fleet_delta > 1:
-        fleet_label = "You are above average"
-    elif fleet_delta < -1:
-        fleet_label = "You are below average"
+    Each component reports whether it was measurable. `weight_pct` keeps its
+    existing numeric meaning (the component's rate, despite the name) so
+    released clients keep rendering; `measurable` is what tells a newer client
+    to show a dash instead of a zero, and `unavailable_reason` says why.
+    """
+    # A first period with nothing in it is not an improvement. Saying "Up 35"
+    # against an empty window reads as progress the driver never made.
+    if not prev["attempted"] and not prev["total"]:
+        delta_label = "No data for last period"
     else:
-        fleet_label = "You are at fleet average"
+        delta = summary["composite"] - prev["composite"]
+        if delta > 0.5:
+            delta_label = f"Up {round(delta, 1)} vs last period"
+        elif delta < -0.5:
+            delta_label = f"Down {abs(round(delta, 1))} vs last period"
+        else:
+            delta_label = "Flat vs last period"
 
-    # comms_weight has no source signal yet — fall back to success_rate so
-    # the composite isn't artificially depressed pre-chat-rollout.
+    fleet_comparable = fleet.get("driver_count", 0) > 1
+    if not fleet_comparable:
+        fleet_label = "No other drivers active this period"
+    else:
+        fleet_delta = summary["composite"] - fleet["composite"]
+        if fleet_delta > 1:
+            fleet_label = "You are above average"
+        elif fleet_delta < -1:
+            fleet_label = "You are below average"
+        else:
+            fleet_label = "You are at fleet average"
+
+    def _component(name, value, weight_key, label, reason):
+        return {
+            "name":               name,
+            "weight_pct":         _num(value),
+            "weight_label":       label,
+            "value":              value,
+            "measurable":         value is not None,
+            "design_weight_pct":  round(SCORE_WEIGHTS[weight_key] * 100),
+            "unavailable_reason": None if value is not None else reason,
+        }
+
     return {
         "score":                summary["composite"],
+        # What share of the designed scorecard the score is actually built on.
+        "score_coverage_pct":   summary["coverage"],
         "vs_last_month_delta":  delta_label,
         "fleet_avg_score":      fleet["composite"],
         "fleet_avg_comparison": fleet_label,
+        "fleet_driver_count":   fleet.get("driver_count", 0),
+        "fleet_comparable":     fleet_comparable,
         "components": [
-            {"name": "On-Time", "weight_pct": summary["on_time_rate"], "weight_label": "(40%)"},
-            {"name": "Success", "weight_pct": summary["success_rate"], "weight_label": "(30%)"},
-            {"name": "COD",     "weight_pct": 100 if summary["cod_collected"] > 0 else 0,
-             "weight_label": "(20%)"},
-            {"name": "Comms",   "weight_pct": summary["success_rate"], "weight_label": "(10%)"},
+            _component("On-Time", summary["on_time_rate"], "on_time_weight", "(40%)",
+                       "No stop in this period had both an estimated arrival "
+                       "and a delivery time."),
+            _component("Success", summary["success_rate"], "success_weight", "(30%)",
+                       "No delivery was attempted in this period."),
+            _component("COD", summary["cod_component"], "cod_weight", "(20%)",
+                       "No COD order was assigned in this period."),
+            _component("Comms", None, "comms_weight", "(10%)",
+                       "Driver-to-customer contact is not recorded yet."),
         ],
     }
 
 
 def _key_metrics(employee, summary, d_from, d_to):
-    """Section 2 — Key Metrics tiles."""
+    """Section 2 — Key Metrics tiles.
+
+    The `*_pct` keys stay numeric for released clients. The `*_measurable`
+    flags and the sample counts beside them are what let a tile render "—"
+    rather than a 0% the data never supported.
+    """
     topup_count, topup_amount = _wallet_topups(employee, d_from, d_to)
     return {
         "deliveries_completed": summary["delivered"],
-        "success_rate_pct":     summary["success_rate"],
-        "on_time_rate_pct":     summary["on_time_rate"],
-        "avg_delay_mins":       summary["avg_delay"],
+        "success_rate_pct":     _num(summary["success_rate"]),
+        "success_measurable":   summary["success_rate"] is not None,
+        # Stops that were actually worked — the success denominator. Pending
+        # stops are excluded: an in-progress trip is not a failed one.
+        "attempted_count":      summary["attempted"],
+        "on_time_rate_pct":     _num(summary["on_time_rate"]),
+        "on_time_measurable":   summary["on_time_rate"] is not None,
+        # Deliveries that carried both an ETA and a delivery time, i.e. the
+        # ones punctuality could be judged on.
+        "on_time_sample":       summary["comparable"],
+        "avg_delay_mins":       _num(summary["avg_delay"]),
+        "avg_delay_measurable": summary["avg_delay"] is not None,
         "cod_collected":        summary["cod_collected"],
+        "cod_orders":           summary["cod_orders"],
         "wallet_topups": {
             "count":  topup_count,
             "amount": topup_amount,
         },
-        "reschedule_rate_pct":  summary["reschedule_rate"],
+        "reschedule_rate_pct":  _num(summary["reschedule_rate"]),
+        "reschedule_measurable": summary["reschedule_rate"] is not None,
     }
 
 
@@ -335,20 +517,26 @@ def _timing_compliance(employee, driver, dn_rows, d_from, d_to):
 
 
 def _vs_fleet(summary, fleet):
-    """Section 4 — vs Fleet Average rates."""
-    on_time_delta = round(summary["on_time_rate"] - fleet["on_time_rate"], 1)
-    success_delta = round(summary["success_rate"] - fleet["success_rate"], 1)
+    """Section 4 — vs Fleet Average rates.
+
+    A delta only exists when both sides could be measured; subtracting a
+    fleet rate that was never measurable from a driver rate that was is a
+    comparison of two different things.
+    """
+    def _pair(key):
+        driver_v, fleet_v = summary[key], fleet[key]
+        comparable = driver_v is not None and fleet_v is not None
+        return {
+            "driver":     _num(driver_v),
+            "fleet":      _num(fleet_v),
+            "delta":      round(driver_v - fleet_v, 1) if comparable else 0,
+            "comparable": comparable and fleet.get("driver_count", 0) > 1,
+        }
+
     return {
-        "on_time_rate": {
-            "driver": summary["on_time_rate"],
-            "fleet":  fleet["on_time_rate"],
-            "delta":  on_time_delta,
-        },
-        "success_rate": {
-            "driver": summary["success_rate"],
-            "fleet":  fleet["success_rate"],
-            "delta":  success_delta,
-        },
+        "on_time_rate":       _pair("on_time_rate"),
+        "success_rate":       _pair("success_rate"),
+        "fleet_driver_count": fleet.get("driver_count", 0),
     }
 
 
@@ -369,7 +557,7 @@ def _daily_cod_history(dn_rows, d_from, d_to):
     for r in dn_rows:
         if r.delivery_status != "Delivered":
             continue
-        if not (r.payment_method or "").upper().startswith("COD"):
+        if (r.get("pay_type") or "") != "COD":
             continue
         if not r.delivered_at:
             continue
@@ -517,12 +705,12 @@ def _trip_timeline_section(driver, d_from, d_to):
     trips = []
     for t in trip_rows:
         stop_rows = frappe.db.sql(
-            """SELECT ds.estimated_arrival,
-                      dn.modified              AS delivered_at,
+            f"""SELECT ds.estimated_arrival,
+                      {delivered_at_sql()}     AS delivered_at,
                       dn.cowberry_delivery_status AS delivery_status
                  FROM `tabDelivery Stop` ds
                  JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
-                WHERE ds.parent = %s
+                WHERE ds.parent = %s AND dn.docstatus = 1
                 ORDER BY ds.idx ASC""",
             (t.name,), as_dict=True,
         )
@@ -620,14 +808,14 @@ def _worst_vs_best_trips(driver, d_from, d_to):
     scored = []
     for name in trip_names:
         rows = frappe.db.sql(
-            """SELECT ds.estimated_arrival,
-                      dn.modified AS delivered_at,
+            f"""SELECT ds.estimated_arrival,
+                      {delivered_at_sql()} AS delivered_at,
                       dn.cowberry_delivery_status AS status,
                       dt.departure_time
                  FROM `tabDelivery Stop` ds
                  JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
                  JOIN `tabDelivery Trip` dt ON dt.name = ds.parent
-                WHERE ds.parent = %s""",
+                WHERE ds.parent = %s AND dn.docstatus = 1""",
             (name,), as_dict=True,
         )
         delivered = [r for r in rows if r.status == "Delivered" and r.delivered_at]
@@ -802,18 +990,28 @@ def driver_dashboard(period="today", **kwargs):
         return ok(data={
             "kpis": {
                 "total_delivered":       s["delivered"],
-                "delivery_success_rate": s["success_rate"],
-                "on_time_rate":          s["on_time_rate"],
-                "avg_delay_mins":        s["avg_delay"],
+                "delivery_success_rate": _num(s["success_rate"]),
+                "on_time_rate":          _num(s["on_time_rate"]),
+                "avg_delay_mins":        _num(s["avg_delay"]),
                 "total_cod_collected":   s["cod_collected"],
                 "wallet_topups":         topup_count,
                 "wallet_topup_value":    topup_amount,
-                "reschedule_rate":       s["reschedule_rate"],
+                "reschedule_rate":       _num(s["reschedule_rate"]),
                 "composite_score":       s["composite"],
             },
-            "trend":           trend,
-            "fleet_avg_score": fleet["composite"],
-            "score_breakdown": SCORE_WEIGHTS,
+            # Which KPIs above rest on real data — a false flag means the 0
+            # beside it is "not measurable", not a measured zero.
+            "measurable": {
+                "delivery_success_rate": s["success_rate"] is not None,
+                "on_time_rate":          s["on_time_rate"] is not None,
+                "avg_delay_mins":        s["avg_delay"] is not None,
+                "reschedule_rate":       s["reschedule_rate"] is not None,
+            },
+            "trend":              trend,
+            "fleet_avg_score":    fleet["composite"],
+            "fleet_driver_count": fleet.get("driver_count", 0),
+            "score_coverage_pct": s["coverage"],
+            "score_breakdown":    SCORE_WEIGHTS,
         })
     except Exception as e:
         return err("DRIVER_DASHBOARD_FAILED", str(e))
@@ -840,11 +1038,11 @@ def trip_timeline(trip=None):
             return err("FORBIDDEN", "This trip is not assigned to you.", 403)
 
         rows = frappe.db.sql(
-            """SELECT ds.delivery_note,
+            f"""SELECT ds.delivery_note,
                       ds.idx                   AS stop_sequence,
                       dn.customer_name         AS customer,
                       ds.estimated_arrival     AS expected_arrival,
-                      dn.modified              AS actual_arrival,
+                      {delivered_at_sql()}     AS actual_arrival,
                       dn.cowberry_delivery_status AS delivery_status
                  FROM `tabDelivery Stop` ds
                  JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
@@ -883,9 +1081,19 @@ def trip_timeline(trip=None):
 def get_my_analytics(from_date=None, to_date=None):
     try:
         employee = _require_driver()
+        # Delivery Trip.driver links to the Driver doctype, not Employee.
+        # Filtering by the employee id matched nothing, so this endpoint
+        # returned all-zero stats regardless of how much the driver had done.
+        from erpera_driver_app.api.trip import _driver_record
+        driver = _driver_record(employee)
+        if not driver:
+            return ok(data={
+                "total_deliveries": 0, "delivered": 0, "failed": 0,
+                "rescheduled": 0, "total_value": 0, "total_cash_submitted": 0,
+            })
 
         date_filter = ""
-        params = [employee]
+        params = [driver]
         if from_date:
             date_filter += " AND posting_date >= %s"
             params.append(from_date)

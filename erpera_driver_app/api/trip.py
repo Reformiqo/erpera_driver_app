@@ -70,6 +70,45 @@ def _raw_payment_method(dn_name):
     return None
 
 
+def payment_columns():
+    """The payment-method columns that actually exist on this bench, in
+    precedence order.
+
+    Callers that already pull a batch of Delivery Notes select these in their
+    own SELECT and resolve with `payment_type_from_row` below, so a month of
+    orders costs one query rather than one `db.get_value` per order per field.
+    """
+    available = _dn_field_names()
+    return [f for f in _PAYMENT_FIELDS if f in available]
+
+
+def payment_type_from_row(row, columns=None):
+    """'COD' or 'Prepaid' for a row that already carries the payment columns.
+
+    Identical precedence to `_resolve_payment_type`, without the per-row
+    queries — the two must never disagree, or the same order reads as COD on
+    one screen and Prepaid on another.
+    """
+    for fname in (columns if columns is not None else _PAYMENT_FIELDS):
+        val = row.get(fname)
+        if val:
+            return "COD" if str(val).upper().startswith("COD") else "Prepaid"
+    return "Prepaid"
+
+
+def delivered_at_sql(alias="dn"):
+    """SQL expression for when a Delivery Note was actually delivered.
+
+    `custom_delivered_timestamp` is the real moment, written by
+    utils.status_timestamps when the status flips. `modified` is only a
+    fallback for orders delivered before that field existed — it moves on
+    every later edit, so anything measuring punctuality against it drifts.
+    """
+    if "custom_delivered_timestamp" in _dn_field_names():
+        return f"COALESCE({alias}.custom_delivered_timestamp, {alias}.modified)"
+    return f"{alias}.modified"
+
+
 def _warehouse_info(warehouse_name):
     """Return rich warehouse info for the Flutter map + route-optimisation
     surface (CD2-I5 follow-up — Hardik asked for address + lat/lng so
