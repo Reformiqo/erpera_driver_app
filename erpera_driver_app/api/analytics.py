@@ -500,22 +500,23 @@ def _timing_compliance(employee, driver, dn_rows, d_from, d_to):
         if not trip_data["delivered_at"]:
             continue
         end = max(trip_data["delivered_at"])
-        end_secs = end.hour * 3600 + end.minute * 60 + end.second
-        trip_end_secs.append(end_secs)
-        if not dep:
-            continue
-        span_mins = (end - dep).total_seconds() / 60
-        # A negative span, or one that runs past a plausible shift, means the
-        # delivery timestamp is not trustworthy for this trip — most often an
-        # order delivered before the field existed, whose fallback is
-        # `modified` and therefore moves every time anyone edits it.
-        if span_mins <= 0 or span_mins > MAX_TRIP_SPAN_MINUTES:
-            skipped_trips += 1
-            continue
-        # Divide by the stops actually delivered on this trip, not every stop
-        # assigned to it. Dividing the working span by stops the driver never
-        # reached describes nothing.
-        per_stop_mins.append(span_mins / len(trip_data["delivered_at"]))
+        if dep:
+            span_mins = (end - dep).total_seconds() / 60
+            # A negative span, or one that runs past a plausible shift, means
+            # the delivery timestamp is not trustworthy for this trip — most
+            # often an order delivered before the field existed, whose
+            # fallback is `modified` and therefore moves every time anyone
+            # edits it. Such a trip is dropped from the end time as well as
+            # the per-stop average: the same untrustworthy timestamp decides
+            # both, so validating only one leaves the other still wrong.
+            if span_mins <= 0 or span_mins > MAX_TRIP_SPAN_MINUTES:
+                skipped_trips += 1
+                continue
+            # Divide by the stops actually delivered on this trip, not every
+            # stop assigned to it. Dividing the working span by stops the
+            # driver never reached describes nothing.
+            per_stop_mins.append(span_mins / len(trip_data["delivered_at"]))
+        trip_end_secs.append(end.hour * 3600 + end.minute * 60 + end.second)
 
     avg_start = _secs_to_ampm(sum(trip_start_secs) / len(trip_start_secs)) if trip_start_secs else None
     avg_end = _secs_to_ampm(sum(trip_end_secs) / len(trip_end_secs)) if trip_end_secs else None
