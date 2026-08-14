@@ -462,18 +462,26 @@ def _key_metrics(employee, summary, d_from, d_to):
     }
 
 
+# A delivery trip is a day's work. A span longer than this is a data problem —
+# a stale timestamp, or a trip left open across days — not a long shift, and
+# averaging it in swamps every honest trip beside it.
+MAX_TRIP_SPAN_MINUTES = 16 * 60
+
+
 def _timing_compliance(employee, driver, dn_rows, d_from, d_to):
     """Section 3 — Timing & Compliance.
 
     avg_trip_start_time uses Delivery Trip.departure_time.
-    avg_trip_end_time uses the max DN.modified of Delivered stops per trip.
-    avg_time_per_stop_mins = (end - start) / stops for the trip, averaged.
-    cash_discrepancies_this_month = COUNT of Cash Submission rows in the
-    window with discrepancy_flag=1 for this driver (docstatus=1).
+    avg_trip_end_time uses the latest delivery timestamp on the trip.
+    avg_time_per_stop_mins spreads the trip's working span across the stops
+    that were actually delivered on it.
+    cash_discrepancies counts Cash Submission rows in the window with
+    discrepancy_flag=1 for this driver (docstatus=1).
     """
     trip_start_secs = []
     trip_end_secs = []
     per_stop_mins = []
+    skipped_trips = 0
 
     # Group DN rows by trip so per-trip end can be computed.
     trips = {}
@@ -489,17 +497,29 @@ def _timing_compliance(employee, driver, dn_rows, d_from, d_to):
             start_secs = dep.hour * 3600 + dep.minute * 60 + dep.second
             trip_start_secs.append(start_secs)
 
-        if trip_data["delivered_at"]:
-            end = max(trip_data["delivered_at"])
-            end_secs = end.hour * 3600 + end.minute * 60 + end.second
-            trip_end_secs.append(end_secs)
-            if dep and trip_data["stops"]:
-                span_mins = max((end - dep).total_seconds() / 60, 0)
-                per_stop_mins.append(span_mins / trip_data["stops"])
+        if not trip_data["delivered_at"]:
+            continue
+        end = max(trip_data["delivered_at"])
+        end_secs = end.hour * 3600 + end.minute * 60 + end.second
+        trip_end_secs.append(end_secs)
+        if not dep:
+            continue
+        span_mins = (end - dep).total_seconds() / 60
+        # A negative span, or one that runs past a plausible shift, means the
+        # delivery timestamp is not trustworthy for this trip — most often an
+        # order delivered before the field existed, whose fallback is
+        # `modified` and therefore moves every time anyone edits it.
+        if span_mins <= 0 or span_mins > MAX_TRIP_SPAN_MINUTES:
+            skipped_trips += 1
+            continue
+        # Divide by the stops actually delivered on this trip, not every stop
+        # assigned to it. Dividing the working span by stops the driver never
+        # reached describes nothing.
+        per_stop_mins.append(span_mins / len(trip_data["delivered_at"]))
 
     avg_start = _secs_to_ampm(sum(trip_start_secs) / len(trip_start_secs)) if trip_start_secs else None
     avg_end = _secs_to_ampm(sum(trip_end_secs) / len(trip_end_secs)) if trip_end_secs else None
-    avg_per_stop = round(sum(per_stop_mins) / len(per_stop_mins)) if per_stop_mins else 0
+    avg_per_stop = round(sum(per_stop_mins) / len(per_stop_mins)) if per_stop_mins else None
 
     discrepancies = frappe.db.count("Cash Submission", {
         "driver": employee,
@@ -511,7 +531,16 @@ def _timing_compliance(employee, driver, dn_rows, d_from, d_to):
     return {
         "avg_trip_start_time":            avg_start,
         "avg_trip_end_time":              avg_end,
-        "avg_time_per_stop_mins":         avg_per_stop,
+        "avg_time_per_stop_mins":         _num(avg_per_stop),
+        "avg_time_per_stop_measurable":   avg_per_stop is not None,
+        # How many trips carried a usable start and end.
+        "timing_sample_trips":            len(per_stop_mins),
+        # Trips dropped for an implausible span — a visible count beats a
+        # quietly skewed average.
+        "timing_skipped_trips":           skipped_trips,
+        # Window-scoped, whatever `period` was asked for. The key below keeps
+        # its old name for released clients even when the window is a week.
+        "cash_discrepancies":             discrepancies,
         "cash_discrepancies_this_month":  discrepancies,
     }
 
@@ -575,7 +604,11 @@ def _daily_cod_history(dn_rows, d_from, d_to):
         "unit":             "INR",
         "buckets": [
             {"label": f"W{i+1}", "amount": b["amount"],
-             "start": str(b["start"]), "end": str(b["end"])}
+             "start": str(b["start"]), "end": str(b["end"]),
+             # The window rarely divides into four equal weeks — a 30-day
+             # month leaves the last bucket 9 days long. Bars drawn without
+             # this read as four like-for-like weeks when they are not.
+             "days": (b["end"] - b["start"]).days + 1}
             for i, b in enumerate(buckets)
         ],
     }
@@ -584,51 +617,82 @@ def _daily_cod_history(dn_rows, d_from, d_to):
 def _cash_submission_compliance(employee, d_from, d_to):
     """Section 6 — recent Cash Submissions with on-time / late tag.
 
-    On-time = submission created on the same day as the submission_date
-    (driver didn't carry the day's cash overnight). Late = created after
-    submission_date.
+    On-time means the cash reached the warehouse on the day it was collected.
+    The comparison is therefore Cash Submission.submission_date against the
+    linked Driver Collection's collection_date — the day the money actually
+    came into the driver's hands.
+
+    It used to compare submission_date against the submission's own
+    `creation`, which are two timestamps of the same handover:
+    `cash_submission.initiate` creates the row and
+    `cash_submission.validate_otp_endpoint` stamps submission_date with
+    today(). Even a driver who sat on the cash for a week initiated and
+    validated on the same later day, so `created_date <= submitted_on` held
+    and the section could not return "Late" for anybody.
     """
     rows = frappe.db.sql(
-        """SELECT name, submission_date, creation, status
-             FROM `tabCash Submission`
-            WHERE driver = %s
-              AND docstatus = 1
-              AND submission_date BETWEEN %s AND %s
-            ORDER BY submission_date DESC, creation DESC
+        """SELECT cs.name, cs.submission_date, cs.creation, cs.status,
+                  dc.collection_date
+             FROM `tabCash Submission` cs
+             LEFT JOIN `tabDriver Collection` dc ON dc.name = cs.collection
+            WHERE cs.driver = %s
+              AND cs.docstatus = 1
+              AND cs.submission_date BETWEEN %s AND %s
+            ORDER BY cs.submission_date DESC, cs.creation DESC
             LIMIT 15""",
         (employee, d_from, d_to),
         as_dict=True,
     )
     entries = []
     for r in rows:
-        created = get_datetime(r.creation)
         submitted_on = getdate(r.submission_date)
-        created_date = getdate(created)
-        if created_date <= submitted_on:
-            entries.append({
-                "date":   _short_date(r.submission_date),
-                "status": "On time",
+        entry = {
+            "date":            _short_date(r.submission_date),
+            "submission_date": str(submitted_on),
+        }
+        if not r.collection_date:
+            # Submissions raised without a Driver Collection (or created
+            # before `collection` was always stamped) have nothing to be
+            # judged against. Say so rather than defaulting to a pass.
+            entry.update({
+                "status":          "Not assessed",
+                "detail":          "No collection linked to this submission.",
+                "collection_date": None,
+                "days_late":       None,
             })
         else:
-            late_days = (created_date - submitted_on).days
-            entries.append({
-                "date":   _short_date(r.submission_date),
-                "status": "Late",
-                "detail": f"{late_days} day(s) late",
-            })
+            collected_on = getdate(r.collection_date)
+            late_days = (submitted_on - collected_on).days
+            entry["collection_date"] = str(collected_on)
+            entry["days_late"] = max(late_days, 0)
+            if late_days <= 0:
+                entry["status"] = "On time"
+            else:
+                entry["status"] = "Late"
+                entry["detail"] = f"{late_days} day(s) after collection"
+        entries.append(entry)
     return {"entries": entries}
 
 
 def _collection_limit_breaches(employee, d_from, d_to):
-    """Section 7 — mid-day submissions vs the driver's
-    daily_collection_limit. A "breach" is a Cash Submission whose amount
-    is at or above the driver's daily limit (early submission because
-    the driver hit their ceiling before the end of the day).
+    """Section 7 — days the driver had to hand cash over before the day ended.
+
+    A mid-day submission is the observable consequence of hitting the ceiling:
+    `pod.submit_proof` refuses a delivery once
+    Employee.current_day_collected_amount plus the new cash would pass
+    daily_collection_limit, and the only way to carry on is to hand the cash
+    in and have `cash_submission.validate_otp_endpoint` reset the counter. So
+    a second (or third) submission on one day is a breach that actually
+    happened. Nothing stores the ceiling event itself, and the counter is
+    overwritten on the next delivery, so this is the record that survives.
+
+    The section used to count submissions whose amount was at or above the
+    whole daily limit. That is not what a breach looks like: a driver at a
+    fifty-thousand ceiling who hands over eight thousand twice in a day has
+    breached it and would still be counted as zero, which is why this panel
+    read "no breaches" for every driver on the site.
     """
-    limit = frappe.db.get_value("Employee", employee, "daily_collection_limit") or 0
-    if not limit:
-        return {"midday_submissions_count": 0, "events": [],
-                "note": "Driver has no daily_collection_limit configured."}
+    limit = flt(frappe.db.get_value("Employee", employee, "daily_collection_limit") or 0)
 
     rows = frappe.db.sql(
         """SELECT name, submission_date, creation, amount
@@ -636,24 +700,45 @@ def _collection_limit_breaches(employee, d_from, d_to):
             WHERE driver = %s
               AND docstatus = 1
               AND submission_date BETWEEN %s AND %s
-              AND amount >= %s
-            ORDER BY submission_date DESC, creation DESC
-            LIMIT 20""",
-        (employee, d_from, d_to, limit),
+            ORDER BY submission_date ASC, creation ASC""",
+        (employee, d_from, d_to),
         as_dict=True,
     )
-    events = []
+
+    by_day = {}
     for r in rows:
-        created = get_datetime(r.creation)
-        events.append({
-            "date":   _short_date(r.submission_date),
-            "time":   created.strftime("%-I:%M %p"),
-            "amount": flt(r.amount),
-        })
+        by_day.setdefault(getdate(r.submission_date), []).append(r)
+
+    events = []
+    at_or_above_limit = 0
+    for day in sorted(by_day, reverse=True):
+        day_rows = by_day[day]
+        if limit and any(flt(r.amount) >= limit for r in day_rows):
+            at_or_above_limit += 1
+        # Rows are ordered oldest-first, so the last handover of the day is the
+        # ordinary end-of-shift one. Every earlier one happened because the
+        # driver had hit the ceiling and could not keep delivering — those are
+        # the mid-day events worth showing, at the time they actually occurred.
+        for r in day_rows[:-1]:
+            created = get_datetime(r.creation)
+            events.append({
+                "date":       _short_date(r.submission_date),
+                "time":       created.strftime("%-I:%M %p"),
+                "amount":     flt(r.amount),
+                "day_total":  flt(sum(flt(x.amount) for x in day_rows)),
+                "submission": r.name,
+            })
+
     return {
         "midday_submissions_count": len(events),
-        "daily_limit":              flt(limit),
-        "events":                   events,
+        "daily_limit":              limit,
+        "limit_configured":         bool(limit),
+        # Days on which one single handover met or exceeded the whole ceiling.
+        # Kept separate: it is a different, rarer event from a mid-day break.
+        "single_submission_at_limit_days": at_or_above_limit,
+        "days_with_submissions":    len(by_day),
+        "events":                   events[:20],
+        "note": None if limit else "Driver has no daily_collection_limit configured.",
     }
 
 
@@ -726,8 +811,16 @@ def _trip_timeline_section(driver, d_from, d_to):
         planned_end = max((r.estimated_arrival for r in stop_rows if r.estimated_arrival), default=None)
         actual_end = max((r.delivered_at for r in delivered), default=None)
 
+        # Both spans are measured from the same point — the trip's departure.
+        # Planned ran departure → last ETA while actual ran first delivery →
+        # last delivery, so the two durations shown side by side were counted
+        # from different starts and the comparison meant nothing.
         planned_span = (planned_end - planned_start).total_seconds() // 60 if planned_start and planned_end else None
-        actual_span = (actual_end - actual_start).total_seconds() // 60 if actual_start and actual_end else None
+        actual_span = (actual_end - planned_start).total_seconds() // 60 if planned_start and actual_end else None
+        if actual_span is not None and not (0 < actual_span <= MAX_TRIP_SPAN_MINUTES):
+            # Same guard as _timing_compliance: a span past a plausible shift
+            # is a stale timestamp, not a long day.
+            actual_span = None
 
         badge = ""
         if planned_end and actual_end:
@@ -818,23 +911,32 @@ def _worst_vs_best_trips(driver, d_from, d_to):
                 WHERE ds.parent = %s AND dn.docstatus = 1""",
             (name,), as_dict=True,
         )
-        delivered = [r for r in rows if r.status == "Delivered" and r.delivered_at]
-        if not delivered:
+        # Only stops that carry both an ETA and a delivery time can be ranked
+        # on punctuality. Scoring against every stop meant a trip with no ETAs
+        # scored 0, so "worst trips" listed whichever trips ERPNext had not
+        # routed rather than whichever trips ran badly.
+        judged = [r for r in rows
+                  if r.status == "Delivered" and r.delivered_at and r.estimated_arrival]
+        if not judged:
             continue
-        on_time = sum(1 for r in delivered
-                      if r.estimated_arrival and r.delivered_at <= r.estimated_arrival)
-        score = round((on_time / len(rows)) * 100) if rows else 0
+        on_time = sum(1 for r in judged if r.delivered_at <= r.estimated_arrival)
+        score = round((on_time / len(judged)) * 100)
         trip_date = rows[0].departure_time
         scored.append({
-            "name":      name,
-            "date":      _short_date(trip_date) if trip_date else "",
-            "score_pct": score,
+            "name":         name,
+            "date":         _short_date(trip_date) if trip_date else "",
+            "score_pct":    score,
+            "judged_stops": len(judged),
+            "total_stops":  len(rows),
         })
 
     scored_by_score = sorted(scored, key=lambda x: x["score_pct"], reverse=True)
     return {
         "best":  scored_by_score[:3],
         "worst": sorted(scored, key=lambda x: x["score_pct"])[:3],
+        # Zero here means no trip in the window had a routed ETA, not that the
+        # driver ran no trips.
+        "ranked_trips": len(scored),
     }
 
 
