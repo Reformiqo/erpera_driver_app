@@ -78,8 +78,57 @@ _STATUS_FILTERS = {
 }
 
 
+# Which date a date filter measures. A Delivery Stop sits between three
+# meaningful dates, and "stops on 14 Aug" picks a different set for each, so
+# the caller says which one they mean rather than the endpoint guessing.
+_DATE_FIELDS = {
+    # When the driver actually ran the trip. Falls back to the trip's creation
+    # date, because a trip whose route the manager has not finalised yet has
+    # no departure_time — the same rule delivery.history uses, so a stop lands
+    # on the same day whichever screen shows it.
+    "trip": "(CASE WHEN dt.departure_time IS NULL THEN DATE(dt.creation)"
+            " ELSE DATE(dt.departure_time) END)",
+    # The stop's own scheduled arrival, written by ERPNext's route pass.
+    "arrival": "DATE(ds.estimated_arrival)",
+    # The Delivery Note's own document date.
+    "posting": "DATE(dn.posting_date)",
+}
+DEFAULT_DATE_FIELD = "trip"
+
+
 def _stop_field_names():
     return {f.fieldname for f in frappe.get_meta("Delivery Stop").fields}
+
+
+def _date_window(filters):
+    """Resolve the date filter to (from, to, field). (None, None, field) when
+    no date was given — an unfiltered call still returns every stop.
+
+    `date` is the single-day shorthand for `from` = `to`. When a range is also
+    supplied the range wins, matching `delivery.history`, so the two endpoints
+    cannot disagree about the same query string. A range with only one end is
+    that one day.
+    """
+    field = (filters.get("date_field") or DEFAULT_DATE_FIELD).strip().lower()
+    if field not in _DATE_FIELDS:
+        raise ValueError(
+            "date_field must be one of: " + ", ".join(_DATE_FIELDS))
+
+    d_from, d_to = filters.get("from"), filters.get("to")
+    if not (d_from or d_to):
+        d_from = d_to = filters.get("date")
+    if not (d_from or d_to):
+        return None, None, field
+
+    try:
+        d_from = getdate(d_from or d_to)
+        d_to = getdate(d_to or d_from)
+    except Exception:
+        raise ValueError("Dates must be in YYYY-MM-DD format.")
+    if d_from > d_to:
+        # A range entered backwards is a typo, not an empty result.
+        d_from, d_to = d_to, d_from
+    return d_from, d_to, field
 
 
 def _require_app_user():
@@ -143,20 +192,10 @@ def _build_conditions(filters):
         conditions.append("ds.customer = %(customer)s")
         params["customer"] = filters["customer"]
 
-    d_from, d_to = filters.get("from"), filters.get("to")
-    if d_from or d_to:
-        d_from = getdate(d_from or d_to)
-        d_to = getdate(d_to or d_from)
-        if d_from > d_to:
-            d_from, d_to = d_to, d_from
-        # Trips are windowed on departure, falling back to creation — the
-        # same rule delivery.history uses, so a stop appears in the same day
-        # on every screen. A trip whose route the manager has not finalised
-        # has no departure_time yet.
+    d_from, d_to, date_field = _date_window(filters)
+    if d_from:
         conditions.append(
-            "((DATE(dt.departure_time) BETWEEN %(d_from)s AND %(d_to)s)"
-            " OR (dt.departure_time IS NULL"
-            "     AND DATE(dt.creation) BETWEEN %(d_from)s AND %(d_to)s))")
+            f"{_DATE_FIELDS[date_field]} BETWEEN %(d_from)s AND %(d_to)s")
         params["d_from"] = d_from
         params["d_to"] = d_to
 
@@ -185,7 +224,8 @@ def _build_conditions(filters):
 
 @frappe.whitelist(methods=["GET"])
 def get_stops(trip=None, status="All", visited=None, delivery_note=None,
-              customer=None, driver=None, limit=None, offset=0, **kwargs):
+              customer=None, driver=None, date=None, date_field=None,
+              limit=None, offset=0, **kwargs):
     """List Delivery Stops.
 
     Query parameters, all optional:
@@ -196,8 +236,25 @@ def get_stops(trip=None, status="All", visited=None, delivery_note=None,
         delivery_note  stops carrying one Delivery Note (it can be on several)
         customer       stops for one customer
         driver         narrow to one Driver record
-        from / to      YYYY-MM-DD window on the trip's departure date
+        date           YYYY-MM-DD, a single day
+        from / to      YYYY-MM-DD, an inclusive range. Supplying only one end
+                       makes it that single day; a backwards range is swapped
+                       rather than returning nothing. A range beats `date`.
+        date_field     which date the filter measures — trip (default) |
+                       arrival | posting. See below.
         limit / offset paging; limit defaults to 100 and is capped at 500
+
+    `date_field` matters because a stop carries three different dates:
+
+        trip      the day the driver ran the trip (departure_time, falling
+                  back to the trip's creation). This is the day the work
+                  happened and is what every other screen windows on.
+        arrival   the stop's scheduled arrival. Note that
+                  Delivery Stop.estimated_arrival is filled by ERPNext's
+                  route pass, which needs a Maps key — where it is blank the
+                  stop cannot match any arrival filter and drops out.
+        posting   the Delivery Note's own document date. A stop with no
+                  delivery note drops out.
 
     Returns every stop on the site — the caller's role does not narrow it.
     Ordered newest trip first, then by stop sequence, so an unfiltered call
@@ -212,13 +269,14 @@ def get_stops(trip=None, status="All", visited=None, delivery_note=None,
         filters = {
             "trip": trip, "status": status, "visited": visited,
             "delivery_note": delivery_note, "customer": customer,
-            "driver": driver,
+            "driver": driver, "date": date, "date_field": date_field,
             # `from` is a Python keyword, so it arrives in **kwargs.
             "from": kwargs.get("from") or kwargs.get("from_date"),
             "to":   kwargs.get("to") or kwargs.get("to_date"),
         }
         try:
             where, params = _build_conditions(filters)
+            applied_from, applied_to, applied_field = _date_window(filters)
         except ValueError as ve:
             return err("VALIDATION_ERROR", str(ve), 400)
 
@@ -285,6 +343,15 @@ def get_stops(trip=None, status="All", visited=None, delivery_note=None,
             "offset":      offset,
             "has_more":    offset + len(stops) < int(total),
             "scope":       "all",
+            # Echoed back so a caller can see which window actually ran —
+            # `date` resolves to a from/to pair, a backwards range comes back
+            # swapped, and `date_field` decides what the dates even mean.
+            "date_filter": {
+                "applied":    bool(applied_from),
+                "from":       str(applied_from) if applied_from else None,
+                "to":         str(applied_to) if applied_to else None,
+                "date_field": applied_field,
+            },
         })
     except NotDriverError as e:
         return e.to_response()
