@@ -108,14 +108,19 @@ def _do_driver_login(email, password, device_id=None, fcm_token=None, app_versio
     # (may rotate independently). We share one custom field for now; if
     # push and concurrent-login start needing separate tracking we'll add
     # a second custom field.
+    # Written column-by-column rather than through a document save. All three
+    # are custom fields that need no validation, and a full save re-runs every
+    # mandatory check on the Employee — so an incomplete HR record, which is
+    # ordinary on a live site, made the driver unable to log in at all. The
+    # error even named fields the driver has no way to supply. `refresh_session`
+    # below already stamps `last_login_at` this way.
+    updates = {"last_login_at": now_datetime()}
     new_device = device_id or fcm_token
     if new_device:
-        emp.fcm_device_token = new_device
+        updates["fcm_device_token"] = new_device
     if app_version:
-        emp.app_version = app_version
-    emp.last_login_at = now_datetime()
-    emp.flags.ignore_permissions = True
-    emp.save()
+        updates["app_version"] = app_version
+    frappe.db.set_value("Employee", emp.name, updates, update_modified=False)
     frappe.db.commit()
 
     api_key, api_secret = _issue_api_credentials(email)
@@ -277,7 +282,6 @@ def send_reset_otp(email):
             # Don't reveal if email exists
             return ok(data={"message": "If the email exists, an OTP has been sent."})
 
-        employee = frappe.db.get_value("Employee", {"user_id": email}, "name")
         log_name = dispatch_otp_v2(
             purpose=PURPOSE_DRIVER_LOGIN,
             reference_doctype="User",
