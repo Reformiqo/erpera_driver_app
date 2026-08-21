@@ -45,9 +45,20 @@ DEFAULT_MAX_RESCHEDULES = 3
 
 def _assert_driver_owns_dn(driver, delivery_note):
     """Return (trip_name, expected_arrival) when the DN is on a trip
-    assigned to this driver; raise FORBIDDEN otherwise."""
+    assigned to this driver; raise FORBIDDEN otherwise.
+
+    A caller with no Driver record owns no trips, and is refused rather than
+    waved through. It used to return early here, which meant the ownership
+    check — the only thing standing between a driver and somebody else's
+    delivery — simply did not run for them. `trip.get_trips` already returns
+    an empty list to such a caller, so there is nothing they could legitimately
+    be updating.
+    """
     if not driver:
-        return None, None
+        raise frappe.PermissionError(
+            "FORBIDDEN: No Driver record is linked to your employee, so no "
+            "deliveries are assigned to you."
+        )
     row = frappe.db.sql(
         """SELECT ds.parent AS trip_name, ds.estimated_arrival
              FROM `tabDelivery Stop` ds
@@ -77,9 +88,9 @@ def _do_update_status(delivery_note, target_status, gps_lat=None, gps_lng=None,
 
     # Scope: DN must be on a trip assigned to this driver.
     from erpera_driver_app.api.trip import _driver_record
-    driver = _driver_record(employee)
     try:
-        trip_name, expected_arrival = _assert_driver_owns_dn(driver, delivery_note)
+        _, expected_arrival = _assert_driver_owns_dn(
+            _driver_record(employee), delivery_note)
     except frappe.PermissionError as pe:
         return err("FORBIDDEN", str(pe), 403)
 
@@ -276,24 +287,23 @@ def _as_name_list(value):
 
 
 @frappe.whitelist(methods=["POST"])
-def bulk_update_status(delivery_trip=None, delivery_notes=None,
-                       target_status="Picked Up"):
-    """Move several stops on one trip to the same status in a single call.
+def bulk_update_status(delivery_notes=None, target_status="Picked Up"):
+    """Move several stops to the same status in a single call.
 
     A driver loading the van picks up every parcel in one go; making the app
     fire one request per stop is slow over patchy mobile data and leaves the
-    trip half-transitioned when the connection drops mid-way.
+    round half-transitioned when the connection drops mid-way.
 
     Body:
-        delivery_trip  — the trip the notes belong to (required)
         delivery_notes — list of Delivery Note names (required)
         target_status  — defaults to "Picked Up"
 
-    Each note goes through the same `_do_update_status` the single-stop
-    endpoints use, so ownership checks, the transition map, the Delivery
-    Attempt Log, the status timestamp and the trip roll-up all behave
-    identically — this endpoint adds no rules of its own beyond requiring
-    that every note actually sits on the given trip.
+    The notes may span any number of trips. There is no trip parameter: each
+    note goes through the same `_do_update_status` the single-stop endpoints
+    use, and that resolves the caller's own Driver record and refuses any note
+    that is not on one of their trips. Naming a trip added nothing to that —
+    it never reached the update and only checked that the notes were stops on
+    it, which is the client's own bookkeeping rather than this endpoint's.
 
     Partial success is normal and reported per note rather than aborting: one
     parcel already scanned, or a note that never left "Pending", should not
@@ -302,42 +312,16 @@ def bulk_update_status(delivery_trip=None, delivery_notes=None,
     """
     try:
         _require_driver()
-        if not delivery_trip:
-            return err("VALIDATION_ERROR", "`delivery_trip` is required.", 400)
         names = _as_name_list(delivery_notes)
         if not names:
             return err("VALIDATION_ERROR",
                        "`delivery_notes` must list at least one Delivery Note.", 400)
         if not target_status:
             return err("VALIDATION_ERROR", "`target_status` is required.", 400)
-        if not frappe.db.exists("Delivery Trip", delivery_trip):
-            return err("NOT_FOUND",
-                       f"Delivery Trip '{delivery_trip}' not found.", 404)
-
-        # Every note must be a stop on this trip. Checked up front, in one
-        # query, so a typo'd trip fails loudly instead of silently updating
-        # nothing.
-        on_trip = set(frappe.db.sql_list(
-            """SELECT delivery_note FROM `tabDelivery Stop`
-                WHERE parent = %s AND delivery_note IN %s""",
-            (delivery_trip, tuple(names)),
-        ))
 
         results = []
         updated = failed = 0
         for name in names:
-            if name not in on_trip:
-                results.append({
-                    "delivery_note": name,
-                    "success": False,
-                    "error": {
-                        "code": "NOT_ON_TRIP",
-                        "message": f"'{name}' is not a stop on {delivery_trip}.",
-                    },
-                })
-                failed += 1
-                continue
-
             res = _do_update_status(name, target_status)
             if res.get("success"):
                 data = res.get("data") or {}
@@ -357,7 +341,6 @@ def bulk_update_status(delivery_trip=None, delivery_notes=None,
                 failed += 1
 
         return ok(data={
-            "delivery_trip": delivery_trip,
             "target_status": target_status,
             "total":         len(names),
             "updated":       updated,
