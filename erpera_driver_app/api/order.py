@@ -10,6 +10,7 @@ from erpera_driver_app.utils.exceptions import (
 )
 from erpera_driver_app.utils.otp import PURPOSE_POD, dispatch_otp_v2, validate_otp_v2
 from erpera_driver_app.utils.response import err, ok
+from erpera_driver_app.utils.notifications import notify_collection_limit
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +356,8 @@ def submit_proof(
             emp.save(ignore_permissions=True)
             current_day_collected = new_total
             daily_limit = float(emp.get("daily_collection_limit") or 0)
+            # Events 5/6 — warn at 80% of the daily ceiling, again at 100%.
+            notify_collection_limit(employee, new_total, daily_limit)
 
         # Auto-create Sales Invoice from the Delivery Note (FRD §6.2.2 /
         # §6.3 row 12). Best-effort: a failure here doesn't roll back the

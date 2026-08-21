@@ -6,6 +6,7 @@ from erpera_driver_app import __version__
 from erpera_driver_app.utils.exceptions import OTPInvalidError
 from erpera_driver_app.utils.otp import PURPOSE_DRIVER_LOGIN, dispatch_otp_v2, validate_otp_v2
 from erpera_driver_app.utils.response import err, ok
+from erpera_driver_app.utils.notifications import register_device
 
 # Session validity window the spec advertises (refresh_session returns
 # expires_at = now + this). Frappe doesn't expire api_key:api_secret
@@ -38,7 +39,8 @@ def _issue_api_credentials(user_id):
 # `login` is the original alias and stays for backward-compat.
 # ---------------------------------------------------------------------------
 
-def _do_driver_login(email, password, device_id=None, fcm_token=None, app_version=None):
+def _do_driver_login(email, password, device_id=None, fcm_token=None, app_version=None,
+                     device_type=None):
     """Shared implementation behind both `driver_login` and `login`.
 
     Returns the same ok()/err() envelope the wrappers would. Side effects:
@@ -103,6 +105,18 @@ def _do_driver_login(email, password, device_id=None, fcm_token=None, app_versio
         # back to the login screen.
         pass  # rotation below is sufficient — no separate kill step needed
 
+    # Register the device for push. The client already sends `fcm_token` here,
+    # and `Employee.fcm_device_token` below cannot carry it: that column holds
+    # `device_id or fcm_token` for the concurrent-login guard, so whenever the
+    # app sends both — which it does — the FCM token was simply discarded and
+    # no push could ever be addressed to this driver. Doing it here means the
+    # app needs no separate register_token call; the endpoint stays for token
+    # rotation, which happens without a login.
+    register_device(
+        user=email, employee=emp.name, fcm_token=fcm_token,
+        device_type=device_type, device_id=device_id,
+    )
+
     # Persist device + version metadata if the client sent them. device_id
     # is the stable per-install UUID; fcm_token is FCM push registration
     # (may rotate independently). We share one custom field for now; if
@@ -142,7 +156,7 @@ def _do_driver_login(email, password, device_id=None, fcm_token=None, app_versio
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def driver_login(usr=None, pwd=None, device_id=None, fcm_token=None, app_version=None,
-                 user=None, password=None):
+                 user=None, password=None, device_type=None):
     """Spec-named driver login (Authentication §1).
 
     Accepts the spec-shaped body `{usr, pwd, device_id, fcm_token, app_version}`
@@ -156,6 +170,7 @@ def driver_login(usr=None, pwd=None, device_id=None, fcm_token=None, app_version
             device_id=device_id,
             fcm_token=fcm_token,
             app_version=app_version,
+            device_type=device_type,
         )
     except Exception as e:
         return err("LOGIN_FAILED", str(e), 500)
@@ -163,7 +178,7 @@ def driver_login(usr=None, pwd=None, device_id=None, fcm_token=None, app_version
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def login(user=None, password=None, usr=None, pwd=None,
-          device_id=None, fcm_token=None, app_version=None):
+          device_id=None, fcm_token=None, app_version=None, device_type=None):
     """Backward-compat alias of `driver_login`. Same contract."""
     try:
         return _do_driver_login(
@@ -172,6 +187,7 @@ def login(user=None, password=None, usr=None, pwd=None,
             device_id=device_id,
             fcm_token=fcm_token,
             app_version=app_version,
+            device_type=device_type,
         )
     except Exception as e:
         return err("LOGIN_FAILED", str(e), 500)

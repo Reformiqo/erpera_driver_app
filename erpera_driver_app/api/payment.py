@@ -92,6 +92,10 @@ def razorpay_webhook():
                         "razorpay_confirmed_at": frappe.utils.now_datetime(),
                     },
                 )
+                # Event 8 — the gate that unblocks POD OTP has just opened.
+                # Highest-value push in the set: without it the app has to sit
+                # on `payment.get_status` polling for the driver to be let in.
+                _notify_payment_confirmed(dn_name, paid_amount)
                 pe_name = _create_razorpay_payment_entry(
                     dn_name, paid_amount, payment_id
                 )
@@ -196,9 +200,50 @@ def poll_pending_razorpay_orders():
                     frappe.db.set_value(
                         "Delivery Note", dn["name"], "razorpay_payment_status", "Confirmed"
                     )
+                    # Event 8 again — the poller is the fallback for a webhook
+                    # that never arrived, so it has to push as well or the
+                    # driver waits on the one path that failed.
+                    # Razorpay's Orders API reports paise; the webhook branch
+                    # above already converted. Normalise here so the helper
+                    # only ever sees rupees.
+                    _notify_payment_confirmed(
+                        dn["name"], float(data.get("amount_paid") or 0) / 100.0)
             except Exception:
                 continue
 
         frappe.db.commit()
     except Exception:
         pass
+
+
+def _notify_payment_confirmed(delivery_note, amount=None):
+    """Event 8 — tell the driver a COD-Online payment cleared.
+
+    `razorpay_payment_status == "Confirmed"` is the hard gate in
+    `order.send_delivery_otp`: until it flips, the driver cannot request the
+    POD OTP and cannot hand the parcel over. Both the webhook and the hourly
+    poller call this, so whichever confirms first is the one that pushes.
+
+    Amount is in rupees at every call site. Swallows its own errors — a failed
+    notification must never stop the payment from being recorded.
+    """
+    try:
+        from erpera_driver_app.notification_events import _employee_for_dn
+        from erpera_driver_app.utils.notifications import notify
+
+        employee = _employee_for_dn(delivery_note)
+        if not employee:
+            return
+        detail = f" of {float(amount):.0f}" if amount else ""
+        notify(
+            employee,
+            "Payment received",
+            f"Online payment{detail} for {delivery_note} is confirmed. "
+            "You can now request the delivery OTP.",
+            event_key="payment_confirmed",
+            reference_doctype="Delivery Note", reference_name=delivery_note,
+            action_type="view_order",
+            data={"delivery_note": delivery_note, "status": "Confirmed"},
+        )
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "notify: payment confirmed")

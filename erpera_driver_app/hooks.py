@@ -17,14 +17,31 @@ fixtures = [
 doc_events = {
     "Delivery Note": {
         "on_submit": "erpera_driver_app.api.delivery.on_submit_delivery_note",
-        "on_cancel": "erpera_driver_app.api.delivery.on_cancel_delivery_note",
+        "on_cancel": [
+            "erpera_driver_app.api.delivery.on_cancel_delivery_note",
+            # Notification event 4 — order cancelled
+            "erpera_driver_app.notification_events.on_dn_cancel",
+        ],
+        # Notification event 3 — ops moved the delivery date
+        "on_update_after_submit": "erpera_driver_app.notification_events.on_dn_update_after_submit",
     },
     "Customer": {
         "before_save": "erpera_driver_app.api.wallet.guard_direct_wallet_balance_writes",
         "validate": "erpera_driver_app.api.wallet.guard_direct_wallet_balance_writes",
     },
     "Delivery Trip": {
-        "validate": "erpera_driver_app.api.delivery_trip.validate"
+        "validate": "erpera_driver_app.api.delivery_trip.validate",
+        # Notification events 1, 2 and 4 — assigned, re-optimised, stops pulled.
+        # Both update hooks: a Delivery Trip is submittable and the manager
+        # edits stops on either side of submit.
+        "after_insert": "erpera_driver_app.notification_events.on_trip_insert",
+        "on_update": "erpera_driver_app.notification_events.on_trip_update",
+        "on_update_after_submit": "erpera_driver_app.notification_events.on_trip_update",
+    },
+    "Communication": {
+        # Notification event 7 — someone other than the driver wrote on one of
+        # their orders.
+        "after_insert": "erpera_driver_app.notification_events.on_communication_insert",
     },
 }
 

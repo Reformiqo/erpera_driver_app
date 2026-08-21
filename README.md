@@ -1147,7 +1147,7 @@ cowberry_driver_app_erp/
     │   ├── response.py              # ok() / err()
     │   ├── exceptions.py            # 9 typed error classes
     │   ├── otp.py                   # dispatch/validate v1 + v2 APIs
-    │   ├── notifications.py         # send_push() via FCM
+    │   ├── notifications.py         # notify() — FCM HTTP v1 + Driver Notification
     │   └── geo.py                   # haversine_m, validate_coords
     ├── api/
     │   ├── __init__.py
