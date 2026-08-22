@@ -54,18 +54,25 @@ def _log(message, title="Driver Notification"):
 def _toggle(fieldname):
     """Read one checkbox from the settings Single.
 
-    The saved value is authoritative: unchecked means off, full stop. The only
-    special case is a Single nobody has opened yet — Frappe writes no row to
-    `tabSingles` until the first save, so the read comes back `None` rather
-    than the checkbox's default. Falling back to the DocField default there
-    makes a fresh install behave as the form shows it (everything ticked),
-    without ever overriding a choice someone actually made.
+    The saved value is authoritative: unchecked means off, full stop.
+
+    Two things have to be handled in this order. `frappe.db.get_single_value`
+    *throws* for a fieldname that is not on the DocType — it does not return
+    None — so the meta lookup has to come first, or an event with no checkbox
+    of its own takes the whole notification down. And a Single nobody has
+    opened yet has no row in `tabSingles` at all, so an existing field still
+    reads back as None; the DocField default covers that, which is why a fresh
+    install behaves as the form shows it without ever overriding a real choice.
     """
+    field = frappe.get_meta(SETTINGS).get_field(fieldname)
+    if not field:
+        # No checkbox for this event — nothing an admin could have switched
+        # off, so it sends.
+        return True
     value = frappe.db.get_single_value(SETTINGS, fieldname)
     if value is not None:
         return bool(cint(value))
-    field = frappe.get_meta(SETTINGS).get_field(fieldname)
-    return bool(cint(field.default)) if field and field.default is not None else True
+    return bool(cint(field.default)) if field.default is not None else True
 
 
 def is_event_enabled(event_key):
