@@ -73,7 +73,7 @@ cowberry/
 ├── patches.txt
 ├── utils/
 │   ├── otp.py                  # OTP framework — has v1 (purpose+ref) and v2 (kwarg-style) APIs
-│   ├── notifications.py        # send_push(employee, title, body, payload=None)
+│   ├── notifications.py        # notify(employee, title, body, event_key=...)
 │   ├── geo.py                  # haversine_m, validate_coords
 │   ├── response.py             # ok() / err() — use these, not raw dicts
 │   └── exceptions.py           # typed app errors mapped to FRD §9.11 error codes

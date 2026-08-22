@@ -5,6 +5,7 @@ from erpera_driver_app.api.driver import _require_driver
 from erpera_driver_app.utils.exceptions import OTPInvalidError
 from erpera_driver_app.utils.otp import PURPOSE_CASH_SUBMISSION, dispatch_otp_v2, validate_otp_v2
 from erpera_driver_app.utils.response import err, ok
+from erpera_driver_app.utils.notifications import notify
 
 # Spec wording for the next_call hint surfaced in initiate's response
 SPEC_NEXT_CALL = "cash_submission.validate_otp"
@@ -422,6 +423,21 @@ def validate_otp_endpoint(submission_id, otp_log_name, otp):
         if emp.get("current_day_collected_amount"):
             emp.current_day_collected_amount = 0
             emp.save(ignore_permissions=True)
+
+        # Event 9 — the warehouse manager accepted the handover, so the daily
+        # ceiling that was blocking COD deliveries has just been cleared. Sent
+        # before the commit so `enqueue_after_commit` releases the push with
+        # the same transaction that reset the total.
+        notify(
+            employee,
+            "Cash handover accepted",
+            f"Your handover {sub.name} has been accepted. Your daily "
+            "collection limit is reset — you can collect COD again.",
+            event_key="cash_handover_accepted",
+            reference_doctype="Cash Submission", reference_name=sub.name,
+            action_type="view_collection",
+            data={"submission": sub.name, "collection": col.name},
+        )
 
         frappe.db.commit()
 

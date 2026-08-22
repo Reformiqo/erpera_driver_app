@@ -19,6 +19,7 @@ from erpera_driver_app.utils.cod import expected_cod
 from erpera_driver_app.utils.response import err, ok
 from erpera_driver_app.utils.status_timestamps import stamp_completed, timestamp_for
 from erpera_driver_app.utils.trip_sync import mark_stop_visited, trip_for_delivery_note
+from erpera_driver_app.utils.notifications import notify_collection_limit
 
 MAX_PHOTO_BYTES = 5 * 1024 * 1024  # spec: max 5 MB
 
@@ -149,6 +150,12 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
             "current_day_collected_amount": new_collected,
             "current_day_collected_date":   today(),
         }, update_modified=False)
+
+        # Events 5/6 — warn at 80% of the daily ceiling, again at 100%. Placed
+        # after the write so the notification quotes the total the driver will
+        # see on their next `collection.get_today`.
+        if is_cod:
+            notify_collection_limit(employee, new_collected, daily_limit)
 
         update = dict(timestamp_for("Delivered"))
         update.update({

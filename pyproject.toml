@@ -11,12 +11,21 @@ description = "Erpera Driver App ERP"
 readme = "README.md"
 requires-python = ">=3.10"
 version = "0.0.1"
-# No runtime dependencies of its own — the bench supplies frappe and erpnext.
-# Build tooling (setuptools/wheel) is deliberately not pinned here: a pin in an
-# app's dependencies is imposed on every bench that installs it, and forcing a
-# downgrade of setuptools mid-build breaks the build environment. Pin it in the
-# bench's own venv if a bench needs it.
-dependencies = []
+# The bench supplies frappe and erpnext. Build tooling (setuptools/wheel) is
+# deliberately not pinned here: a pin in an app's dependencies is imposed on
+# every bench that installs it, and forcing a downgrade of setuptools mid-build
+# breaks the build environment. Pin it in the bench's own venv if a bench needs
+# it.
+#
+# google-auth is a genuine runtime dependency: FCM HTTP v1 signs every push with
+# an OAuth2 token minted from the service account in Driver Settings. Frappe
+# usually ships it already for the Google integrations, so this is here to make
+# the requirement explicit rather than to force an install. Left unpinned for
+# the same reason as above. Without it, pushes are skipped and the Error Log
+# says so; nothing else breaks.
+dependencies = [
+    "google-auth",
+]
 
 [project.urls]
 Homepage = "https://github.com/reformiqo/cowberry_driver_app_erp"

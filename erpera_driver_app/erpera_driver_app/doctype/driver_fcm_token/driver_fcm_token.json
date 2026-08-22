@@ -1,0 +1,45 @@
+{
+ "actions": [],
+ "creation": "2026-08-21 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "employee",
+  "device_type",
+  "device_id",
+  "column_break_1",
+  "is_active",
+  "last_used",
+  "section_token",
+  "fcm_token"
+ ],
+ "fields": [
+  {"fieldname": "user", "fieldtype": "Link", "label": "User", "options": "User", "reqd": 1, "in_list_view": 1, "in_standard_filter": 1},
+  {"fieldname": "employee", "fieldtype": "Link", "label": "Employee", "options": "Employee", "in_list_view": 1, "description": "Resolved from the User at registration so a push can be addressed by Employee."},
+  {"fieldname": "device_type", "fieldtype": "Select", "label": "Device Type", "options": "Android\niOS", "default": "Android", "in_list_view": 1},
+  {"fieldname": "device_id", "fieldtype": "Data", "label": "Device ID", "description": "Stable per-install UUID sent by the app. One row per device, so re-registering the same device replaces its token instead of piling up rows."},
+  {"fieldname": "column_break_1", "fieldtype": "Column Break"},
+  {"fieldname": "is_active", "fieldtype": "Check", "label": "Is Active", "default": "1", "in_list_view": 1, "in_standard_filter": 1, "description": "Cleared automatically when FCM reports the token as unregistered."},
+  {"fieldname": "last_used", "fieldtype": "Datetime", "label": "Last Used", "read_only": 1},
+  {"fieldname": "section_token", "fieldtype": "Section Break", "label": "Token"},
+  {"fieldname": "fcm_token", "fieldtype": "Small Text", "label": "FCM Token", "reqd": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-21 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Erpera Driver App",
+ "name": "Driver FCM Token",
+ "naming_rule": "Expression (old style)",
+ "autoname": "format:FCM-{#####}",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "report": 1, "export": 1},
+  {"role": "Delivery Manager", "read": 1, "report": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

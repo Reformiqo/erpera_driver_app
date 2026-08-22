@@ -1,0 +1,53 @@
+{
+ "actions": [],
+ "creation": "2026-08-21 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "firebase_section",
+  "firebase_service_account_json",
+  "notification_section",
+  "enable_notifications",
+  "notify_trip_assigned",
+  "notify_trip_updated",
+  "notify_order_rescheduled",
+  "notify_order_cancelled",
+  "notify_column_break",
+  "notify_collection_limit_warning",
+  "notify_collection_limit_reached",
+  "notify_customer_chat_message",
+  "notify_payment_confirmed",
+  "notify_cash_handover_accepted"
+ ],
+ "fields": [
+  {"fieldname": "firebase_section", "fieldtype": "Section Break", "label": "Firebase Credentials"},
+  {"fieldname": "firebase_service_account_json", "fieldtype": "Code", "options": "JSON", "label": "Service Account JSON"},
+  {"fieldname": "notification_section", "fieldtype": "Section Break", "label": "Events"},
+  {"fieldname": "enable_notifications", "fieldtype": "Check", "label": "Enable Notifications", "default": "1", "description": "Untick to stop every driver notification."},
+  {"fieldname": "notify_trip_assigned", "fieldtype": "Check", "label": "1. New trip assigned", "default": "1", "description": "A trip is assigned to the driver, or moved to them from someone else."},
+  {"fieldname": "notify_trip_updated", "fieldtype": "Check", "label": "2. Trip updated / re-optimised", "default": "1", "description": "Stops are added to their trip, or the stop order changes."},
+  {"fieldname": "notify_order_rescheduled", "fieldtype": "Check", "label": "3. Order rescheduled by ops", "default": "1", "description": "The office moves a delivery date. Silent when the driver reschedules it."},
+  {"fieldname": "notify_order_cancelled", "fieldtype": "Check", "label": "4. Order cancelled / pulled from trip", "default": "1", "description": "An order is cancelled, pulled off the trip, or the whole trip is taken away."},
+  {"fieldname": "notify_column_break", "fieldtype": "Column Break"},
+  {"fieldname": "notify_collection_limit_warning", "fieldtype": "Check", "label": "5. Collection limit warning (≥80%)", "default": "1", "description": "Cash collected passes 80% of the daily limit. Once a day."},
+  {"fieldname": "notify_collection_limit_reached", "fieldtype": "Check", "label": "6. Collection limit reached (100%)", "default": "1", "description": "The limit is hit and no more COD can be accepted. Once a day."},
+  {"fieldname": "notify_customer_chat_message", "fieldtype": "Check", "label": "7. Customer chat message", "default": "1", "description": "Someone other than the driver writes on one of their orders."},
+  {"fieldname": "notify_payment_confirmed", "fieldtype": "Check", "label": "8. COD-Online payment confirmed", "default": "1", "description": "An online COD payment clears, which unblocks the delivery OTP."},
+  {"fieldname": "notify_cash_handover_accepted", "fieldtype": "Check", "label": "9. Cash handover accepted by WM", "default": "1", "description": "The warehouse manager accepts the cash and the daily limit resets."}
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-21 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Erpera Driver App",
+ "name": "Driver Notification Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {"role": "System Manager", "read": 1, "write": 1}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
