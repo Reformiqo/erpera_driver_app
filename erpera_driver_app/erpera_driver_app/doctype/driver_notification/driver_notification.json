@@ -23,7 +23,7 @@
  ],
  "fields": [
   {"fieldname": "title", "fieldtype": "Data", "label": "Title", "reqd": 1, "in_list_view": 1},
-  {"fieldname": "event_key", "fieldtype": "Data", "label": "Event Key", "read_only": 1, "in_standard_filter": 1, "description": "Matches the notify_<event_key> toggle in Driver Settings."},
+  {"fieldname": "event_key", "fieldtype": "Data", "label": "Event Key", "read_only": 1, "in_standard_filter": 1, "description": "Matches the notify_<event_key> toggle in Driver Notification Settings."},
   {"fieldname": "employee", "fieldtype": "Link", "label": "Employee", "options": "Employee", "in_list_view": 1, "in_standard_filter": 1},
   {"fieldname": "user", "fieldtype": "Link", "label": "User", "options": "User", "in_standard_filter": 1},
   {"fieldname": "column_break_1", "fieldtype": "Column Break"},
