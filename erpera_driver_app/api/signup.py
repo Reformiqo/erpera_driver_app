@@ -370,18 +370,29 @@ def signup(full_name=None, mobile_no=None, email=None, password=None,
 
 
 # ---------------------------------------------------------------------------
-# Taking an account out of service
+# Closing an account
 # ---------------------------------------------------------------------------
 
-def _require_manager():
-    if "System Manager" not in frappe.get_roles():
-        raise frappe.PermissionError(
-            "Only a System Manager can enable or disable a driver account.")
+def _target_account(email):
+    """(email, error) — whose account this call is allowed to act on.
 
-
-def _resolve(email):
-    """(email, error) — normalised the way signup normalises it."""
+    A System Manager may name any account. Anyone else may only close their
+    own, and need not send an email at all: the app's Delete Account button
+    already knows who is signed in, and accepting an email from a driver would
+    let one driver close another's account.
+    """
+    roles = frappe.get_roles()
     email = (email or "").strip().lower()
+
+    if "System Manager" not in roles:
+        if "Driver" not in roles:
+            raise frappe.PermissionError(
+                "You do not have permission to close a driver account.")
+        if email and email != frappe.session.user:
+            raise frappe.PermissionError(
+                "You can only delete your own account.")
+        email = frappe.session.user
+
     if not email:
         return None, err("VALIDATION_ERROR", "`email` is required.", 400)
     if not frappe.db.exists("User", email):
@@ -390,45 +401,46 @@ def _resolve(email):
 
 
 @frappe.whitelist(methods=["POST"])
-def disable_account(email=None):
-    """Take a driver out of service without destroying anything.
+def delete_account(email=None):
+    """Close a driver account. Backs the app's Delete Account button.
 
-    Body: `{email}`. System Manager only.
+    A driver calls this with no body to close their own account. A System
+    Manager may pass `{email}` to close somebody else's.
 
-    This is the counterpart to `signup`, and deliberately not a delete. What a
-    driver leaves behind — Delivery Attempt Logs, Cash Submissions, Driver
-    Collections, Delivery Trips — is not really about the driver: it is the
-    record of what happened to particular parcels and particular money, and it
-    is what answers "why did this customer's order not arrive?" months later.
-    Deleting the account to tidy it up takes that with it, or orphans it.
+    The driver is signed out and cannot get back in, which is what "deleted"
+    means to them. Underneath, the User is disabled rather than destroyed, and
+    that distinction is deliberate: Delivery Attempt Logs, Cash Submissions,
+    Driver Collections and Delivery Trips are not really about the driver, they
+    are the record of what happened to particular parcels and particular money.
+    Destroying the account to honour the button would either take those with it
+    or leave them pointing at a name that no longer resolves — and it is the
+    same records that answer "why did this customer's order not arrive?" months
+    later. `enable_account` can undo it.
 
-    Disabling stops the login immediately, is reversible with
-    `enable_account`, and leaves every record intact and still attributable.
-    `auth._do_driver_login` checks `enabled` before anything else, so the
-    driver is locked out on their very next request.
-
-    Their registered devices are deactivated too, so a phone that still has
-    the app installed stops receiving pushes for work it can no longer see.
+    The client should show its own confirmation dialog before calling, then
+    clear its stored credentials and return to the login screen. There is no
+    need to call logout afterwards: every session and the api_secret are
+    already gone by the time this responds, so a logout call would only 401.
     """
     try:
-        _require_manager()
-        email, error = _resolve(email)
+        email, error = _target_account(email)
         if error:
             return error
 
         # Both fields in one document save. `api_secret` is a Password field,
         # so Frappe keeps it in `__Auth` rather than the table column —
-        # `frappe.db.set_value` would write a string that nothing ever reads
-        # and the old secret would go on working. Saving the document is how
+        # `frappe.db.set_value` would write a string nothing ever reads and the
+        # old secret would go on working. Saving the document is how
         # `auth._issue_api_credentials` rotates it at every login.
-        #
-        # Rotating matters: a disabled User is refused at login, but a phone
-        # already holding a valid api_key:api_secret is not making login calls.
         user = frappe.get_doc("User", email)
         user.enabled = 0
         user.api_secret = frappe.generate_hash(length=15)
         user.flags.ignore_permissions = True
         user.save(ignore_permissions=True)
+
+        # Two ways in, so two to close: the rotated secret kills token auth,
+        # and this kills any cookie session, on every device at once.
+        frappe.db.delete("Sessions", {"user": email})
 
         devices = frappe.get_all("Driver FCM Token",
                                  filters={"user": email, "is_active": 1},
@@ -438,46 +450,51 @@ def disable_account(email=None):
 
         frappe.db.commit()
         return ok(data={
-            "email":              email,
-            "enabled":            False,
+            "email":               email,
+            "deleted":             True,
             "devices_deactivated": len(devices),
-            "message": "Account disabled. Records are untouched; use "
-                       "enable_account to restore access.",
+            "message": "Your account has been deleted successfully.",
         })
     except frappe.PermissionError as e:
         return err("FORBIDDEN", str(e), 403)
     except Exception as e:
         frappe.db.rollback()
-        frappe.log_error(title="Disabling driver account failed",
+        frappe.log_error(title="Closing driver account failed",
                          message=frappe.get_traceback())
-        return err("DISABLE_ACCOUNT_FAILED", str(e), 500)
+        return err("DELETE_ACCOUNT_FAILED", str(e), 500)
 
 
 @frappe.whitelist(methods=["POST"])
 def enable_account(email=None):
-    """Put a disabled driver back in service. System Manager only.
+    """Restore an account closed by `delete_account`. System Manager only.
 
-    Devices are not reactivated here — the app registers its FCM token again
-    on the next login, and a token left idle while the account was disabled
-    may have been reissued by Firebase in the meantime.
+    The driver cannot ask for this themselves — they can no longer log in —
+    so it is deliberately not self-service.
+
+    Devices are not reactivated: the app registers its FCM token again at the
+    next login, and one left idle meanwhile may have been reissued by Firebase.
     """
     try:
-        _require_manager()
-        email, error = _resolve(email)
-        if error:
-            return error
+        if "System Manager" not in frappe.get_roles():
+            raise frappe.PermissionError(
+                "Only a System Manager can restore an account.")
+        email = (email or "").strip().lower()
+        if not email:
+            return err("VALIDATION_ERROR", "`email` is required.", 400)
+        if not frappe.db.exists("User", email):
+            return err("NOT_FOUND", f"No user found for '{email}'.", 404)
 
         frappe.db.set_value("User", email, "enabled", 1)
         frappe.db.commit()
         return ok(data={
             "email":   email,
             "enabled": True,
-            "message": "Account enabled. The driver can log in again.",
+            "message": "Account restored. The driver can log in again.",
         })
     except frappe.PermissionError as e:
         return err("FORBIDDEN", str(e), 403)
     except Exception as e:
         frappe.db.rollback()
-        frappe.log_error(title="Enabling driver account failed",
+        frappe.log_error(title="Restoring driver account failed",
                          message=frappe.get_traceback())
         return err("ENABLE_ACCOUNT_FAILED", str(e), 500)
