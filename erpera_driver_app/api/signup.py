@@ -379,6 +379,26 @@ def _require_manager():
             "Only a System Manager can enable or disable a driver account.")
 
 
+# disable_account only — enable_account above is untouched and still requires
+# System Manager. Broader because the people who actually take a driver out of
+# service day to day are Delivery Managers and warehouse managers, not System
+# Manager, and the exact-match check above was locking them out. `driver` is
+# in the set too, so a Driver-role caller is not refused either.
+#
+# Compared case-insensitively: the site carries a lowercase `warehouse manager`
+# created through the UI beside Title-Case ERPNext defaults. Same set as
+# delivery_stop.MANAGER_ROLES plus `driver`.
+DISABLE_MANAGER_ROLES = {"system manager", "delivery manager",
+                          "warehouse manager", "warehouse executive", "driver"}
+
+
+def _require_disable_manager():
+    roles = {r.strip().lower() for r in frappe.get_roles()}
+    if not roles & DISABLE_MANAGER_ROLES:
+        raise frappe.PermissionError(
+            "You do not have permission to disable a driver account.")
+
+
 def _resolve(email):
     """(email, error) — normalised the way signup normalises it."""
     email = (email or "").strip().lower()
@@ -393,7 +413,8 @@ def _resolve(email):
 def disable_account(email=None):
     """Take a driver out of service without destroying anything.
 
-    Body: `{email}`. System Manager only.
+    Body: `{email}`. Caller must hold System Manager, Delivery Manager,
+    warehouse manager, warehouse executive, or Driver.
 
     This is the counterpart to `signup`, and deliberately not a delete. What a
     driver leaves behind — Delivery Attempt Logs, Cash Submissions, Driver
@@ -411,7 +432,7 @@ def disable_account(email=None):
     the app installed stops receiving pushes for work it can no longer see.
     """
     try:
-        _require_manager()
+        _require_disable_manager()
         email, error = _resolve(email)
         if error:
             return error
