@@ -367,3 +367,117 @@ def signup(full_name=None, mobile_no=None, email=None, password=None,
         frappe.log_error(title="Driver signup failed",
                          message=frappe.get_traceback())
         return err("SIGNUP_FAILED", str(e), 500)
+
+
+# ---------------------------------------------------------------------------
+# Taking an account out of service
+# ---------------------------------------------------------------------------
+
+def _require_manager():
+    if "System Manager" not in frappe.get_roles():
+        raise frappe.PermissionError(
+            "Only a System Manager can enable or disable a driver account.")
+
+
+def _resolve(email):
+    """(email, error) — normalised the way signup normalises it."""
+    email = (email or "").strip().lower()
+    if not email:
+        return None, err("VALIDATION_ERROR", "`email` is required.", 400)
+    if not frappe.db.exists("User", email):
+        return None, err("NOT_FOUND", f"No user found for '{email}'.", 404)
+    return email, None
+
+
+@frappe.whitelist(methods=["POST"])
+def disable_account(email=None):
+    """Take a driver out of service without destroying anything.
+
+    Body: `{email}`. System Manager only.
+
+    This is the counterpart to `signup`, and deliberately not a delete. What a
+    driver leaves behind — Delivery Attempt Logs, Cash Submissions, Driver
+    Collections, Delivery Trips — is not really about the driver: it is the
+    record of what happened to particular parcels and particular money, and it
+    is what answers "why did this customer's order not arrive?" months later.
+    Deleting the account to tidy it up takes that with it, or orphans it.
+
+    Disabling stops the login immediately, is reversible with
+    `enable_account`, and leaves every record intact and still attributable.
+    `auth._do_driver_login` checks `enabled` before anything else, so the
+    driver is locked out on their very next request.
+
+    Their registered devices are deactivated too, so a phone that still has
+    the app installed stops receiving pushes for work it can no longer see.
+    """
+    try:
+        _require_manager()
+        email, error = _resolve(email)
+        if error:
+            return error
+
+        # Both fields in one document save. `api_secret` is a Password field,
+        # so Frappe keeps it in `__Auth` rather than the table column —
+        # `frappe.db.set_value` would write a string that nothing ever reads
+        # and the old secret would go on working. Saving the document is how
+        # `auth._issue_api_credentials` rotates it at every login.
+        #
+        # Rotating matters: a disabled User is refused at login, but a phone
+        # already holding a valid api_key:api_secret is not making login calls.
+        user = frappe.get_doc("User", email)
+        user.enabled = 0
+        user.api_secret = frappe.generate_hash(length=15)
+        user.flags.ignore_permissions = True
+        user.save(ignore_permissions=True)
+
+        devices = frappe.get_all("Driver FCM Token",
+                                 filters={"user": email, "is_active": 1},
+                                 pluck="name")
+        for name in devices:
+            frappe.db.set_value("Driver FCM Token", name, "is_active", 0)
+
+        frappe.db.commit()
+        return ok(data={
+            "email":              email,
+            "enabled":            False,
+            "devices_deactivated": len(devices),
+            "message": "Account disabled. Records are untouched; use "
+                       "enable_account to restore access.",
+        })
+    except frappe.PermissionError as e:
+        return err("FORBIDDEN", str(e), 403)
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error(title="Disabling driver account failed",
+                         message=frappe.get_traceback())
+        return err("DISABLE_ACCOUNT_FAILED", str(e), 500)
+
+
+@frappe.whitelist(methods=["POST"])
+def enable_account(email=None):
+    """Put a disabled driver back in service. System Manager only.
+
+    Devices are not reactivated here — the app registers its FCM token again
+    on the next login, and a token left idle while the account was disabled
+    may have been reissued by Firebase in the meantime.
+    """
+    try:
+        _require_manager()
+        email, error = _resolve(email)
+        if error:
+            return error
+
+        frappe.db.set_value("User", email, "enabled", 1)
+        frappe.db.commit()
+        return ok(data={
+            "email":   email,
+            "enabled": True,
+            "message": "Account enabled. The driver can log in again.",
+        })
+    except frappe.PermissionError as e:
+        return err("FORBIDDEN", str(e), 403)
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error(title="Enabling driver account failed",
+                         message=frappe.get_traceback())
+        return err("ENABLE_ACCOUNT_FAILED", str(e), 500)
