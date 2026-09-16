@@ -36,6 +36,7 @@ from erpera_driver_app.api.trip import (
     _dn_field_names,
     _order_stage,
     _warehouse_info,
+    _driver_record,
 )
 from erpera_driver_app.utils.cod import expected_cod
 from erpera_driver_app.utils.exceptions import NotDriverError
@@ -262,6 +263,11 @@ def get_stops(trip=None, status="All", visited=None, delivery_note=None,
     """
     try:
         _require_app_user()
+        employee = _require_driver()
+        driver = _driver_record(employee)
+
+        if not driver:
+            return ok(data={})
 
         limit = min(cint(limit) or DEFAULT_LIMIT, MAX_LIMIT)
         offset = max(cint(offset), 0)
