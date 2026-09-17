@@ -443,7 +443,7 @@ def get_orders(trip=None, status="All"):
             SELECT dn.name                                  AS name,
                    dn.customer                              AS customer,
                    dn.customer_name                         AS customer_name,
-                   dn.address_display                       AS customer_address,
+                   ds.customer_address                      AS customer_address,
                    dn.contact_mobile                        AS contact_mobile,
                    IFNULL(dn.cowberry_delivery_status,'Pending') AS delivery_status,
                    dn.grand_total                           AS grand_total,

@@ -42,7 +42,8 @@ def get_order_detail(delivery_note=None):
         driver = _driver_record(employee)
         if driver:
             stop_row = frappe.db.sql(
-                """SELECT ds.parent AS trip_name, ds.idx, ds.estimated_arrival
+                """SELECT ds.parent AS trip_name, ds.idx, ds.estimated_arrival,
+                          ds.customer_address AS stop_address
                      FROM `tabDelivery Stop` ds
                      JOIN `tabDelivery Trip` dt ON dt.name = ds.parent
                     WHERE ds.delivery_note = %s AND dt.driver = %s
@@ -54,9 +55,11 @@ def get_order_detail(delivery_note=None):
                            "This delivery note is not assigned to you.", 403)
             stop_sequence = stop_row[0].idx
             expected_arrival = stop_row[0].estimated_arrival
+            stop_address = stop_row[0].stop_address
         else:
             stop_sequence = None
             expected_arrival = None
+            stop_address = None
 
         # CD2-I5 Point 3: payment_type via shared helper (cowberry_payment_method
         # may be empty/missing — fall through to delhivery_payment_mode → Prepaid).
@@ -142,7 +145,7 @@ def get_order_detail(delivery_note=None):
         return ok(data={
             "delivery_note":         dn.name,
             "customer":              dn.customer_name or dn.customer,
-            "customer_address":      dn.address_display,
+            "customer_address":      stop_address,
             "contact_mobile":        dn.contact_mobile,
             "delivery_status":       delivery_status,
             # CD2-I5 Point 3: human-friendly order stage label
