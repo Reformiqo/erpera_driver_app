@@ -5,6 +5,7 @@ def after_install():
     """Seed singleton settings docs if they don't already exist."""
     _seed_driver_settings()
     _seed_reverse_logistics_settings()
+    _seed_analytics_settings()
     _seed_roles()
 
 
@@ -27,6 +28,20 @@ def _seed_reverse_logistics_settings():
         doc = frappe.new_doc("Reverse Logistics Settings")
         doc.enable_reverse_logistics = 0
         doc.max_return_days = 7
+        doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+
+def _seed_analytics_settings():
+    """Write the Analytics Settings row so the defaults are visible in the desk.
+
+    The analytics code falls back to the same numbers when no row exists, so
+    this changes no output — it just means an admin opening the form sees the
+    values the dashboard is actually using rather than an apparently blank
+    configuration.
+    """
+    if not frappe.db.exists("Analytics Settings", "Analytics Settings"):
+        doc = frappe.new_doc("Analytics Settings")
         doc.insert(ignore_permissions=True)
         frappe.db.commit()
 

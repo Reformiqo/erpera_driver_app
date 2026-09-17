@@ -170,19 +170,31 @@ def _order_stage(delivery_status):
     return _STAGE_MAP.get(delivery_status or "", "Pending")
 
 
+# OLD signature — the window was a fixed default in the signature:
+#     def _resolve_expected_arrival(stop_estimated, trip_departure, stop_idx,
+#                                   default_minutes_per_stop=30):
 def _resolve_expected_arrival(stop_estimated, trip_departure, stop_idx,
-                              default_minutes_per_stop=30):
+                              default_minutes_per_stop=None):
     """Fallback for missing Delivery Stop.estimated_arrival.
 
     When the warehouse manager set up the trip but didn't fill estimated
     arrival per stop, derive an ETA from the trip's departure_time + a
     fixed per-stop window. Better than handing the Flutter card a null
     that renders as '--:--' on screen.
+
+    The per-stop window comes from `Analytics Settings` when the caller does
+    not pass one, so the assumption behind every derived ETA is visible and
+    editable in the desk instead of buried in this signature.
     """
     if stop_estimated:
         return stop_estimated
     if trip_departure and stop_idx:
         from frappe.utils import add_to_date
+
+        from erpera_driver_app.utils import analytics_settings as settings
+        if default_minutes_per_stop is None:
+            default_minutes_per_stop = settings.count(
+                "default_minutes_per_stop", minimum=1)
         return add_to_date(trip_departure, minutes=stop_idx * default_minutes_per_stop)
     return None
 
