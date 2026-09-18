@@ -1,0 +1,357 @@
+{
+ "actions": [],
+ "creation": "2026-09-17 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "score_section",
+  "on_time_weight",
+  "success_weight",
+  "score_column_break",
+  "cod_weight",
+  "comms_weight",
+  "cod_score_section",
+  "cod_score_mode",
+  "comparison_section",
+  "period_delta_threshold",
+  "comparison_column_break",
+  "fleet_delta_threshold",
+  "window_section",
+  "week_days",
+  "window_column_break",
+  "month_days",
+  "cod_history_section",
+  "cod_history_buckets",
+  "cod_history_column_break",
+  "currency_label",
+  "heatmap_section",
+  "heatmap_morning_end_hour",
+  "heatmap_midday_end_hour",
+  "heatmap_afternoon_end_hour",
+  "heatmap_column_break",
+  "heatmap_some_max",
+  "heatmap_often_max",
+  "eta_section",
+  "default_minutes_per_stop",
+  "eta_column_break",
+  "eta_trend_threshold_mins",
+  "timing_outlier_max_mins",
+  "behaviour_section",
+  "eta_fallback_enabled",
+  "per_stop_variance_mode",
+  "behaviour_column_break",
+  "cash_variance_group_by",
+  "limits_section",
+  "trip_timeline_limit",
+  "cash_compliance_limit",
+  "limit_breach_limit",
+  "limits_column_break",
+  "discrepancy_limit",
+  "per_stop_variance_limit",
+  "best_worst_count"
+ ],
+ "fields": [
+  {
+   "fieldname": "score_section",
+   "fieldtype": "Section Break",
+   "label": "Performance Score Weights",
+   "description": "How much each component contributes to the 0-100 score. The four weights must add up to 100."
+  },
+  {
+   "fieldname": "on_time_weight",
+   "fieldtype": "Float",
+   "label": "On-Time Weight (%)",
+   "default": "40",
+   "reqd": 1,
+   "description": "Share of the score earned by delivering before the planned arrival time."
+  },
+  {
+   "fieldname": "success_weight",
+   "fieldtype": "Float",
+   "label": "Success Weight (%)",
+   "default": "30",
+   "reqd": 1,
+   "description": "Share of the score earned by the proportion of stops actually delivered."
+  },
+  {
+   "fieldname": "score_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "cod_weight",
+   "fieldtype": "Float",
+   "label": "COD Weight (%)",
+   "default": "20",
+   "reqd": 1,
+   "description": "Share of the score earned from cash collection."
+  },
+  {
+   "fieldname": "comms_weight",
+   "fieldtype": "Float",
+   "label": "Comms Weight (%)",
+   "default": "10",
+   "reqd": 1,
+   "description": "Share of the score for customer communication. No comms data source exists yet, so this currently mirrors the Success component."
+  },
+  {
+   "fieldname": "cod_score_section",
+   "fieldtype": "Section Break",
+   "label": "COD Component"
+  },
+  {
+   "fieldname": "cod_score_mode",
+   "fieldtype": "Select",
+   "label": "COD Scoring Mode",
+   "options": "Binary\nCollection Rate",
+   "default": "Binary",
+   "description": "Binary: full marks if any COD at all was collected, zero if none. Collection Rate: marks in proportion to cash collected against cash expected (a fairer measure)."
+  },
+  {
+   "fieldname": "comparison_section",
+   "fieldtype": "Section Break",
+   "label": "Comparison Thresholds"
+  },
+  {
+   "fieldname": "period_delta_threshold",
+   "fieldtype": "Float",
+   "label": "Period Change Threshold (points)",
+   "default": "0.5",
+   "description": "Score must move by more than this before the screen says Up or Down instead of Flat."
+  },
+  {
+   "fieldname": "comparison_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "fleet_delta_threshold",
+   "fieldtype": "Float",
+   "label": "Fleet Gap Threshold (points)",
+   "default": "1",
+   "description": "How far from the fleet average a driver must be before the screen says above or below average."
+  },
+  {
+   "fieldname": "window_section",
+   "fieldtype": "Section Break",
+   "label": "Time Windows",
+   "description": "How many days each period selector covers, counting back from today."
+  },
+  {
+   "fieldname": "week_days",
+   "fieldtype": "Int",
+   "label": "Week = last N days",
+   "default": "7",
+   "description": "Days covered by the Week option, today included."
+  },
+  {
+   "fieldname": "window_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "month_days",
+   "fieldtype": "Int",
+   "label": "Month = last N days",
+   "default": "30",
+   "description": "Days covered by the Month option, today included. This is a rolling window, not a calendar month."
+  },
+  {
+   "fieldname": "cod_history_section",
+   "fieldtype": "Section Break",
+   "label": "COD Collection History"
+  },
+  {
+   "fieldname": "cod_history_buckets",
+   "fieldtype": "Int",
+   "label": "Number of Buckets",
+   "default": "4",
+   "description": "How many bars the COD history chart is split into across the window."
+  },
+  {
+   "fieldname": "cod_history_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "currency_label",
+   "fieldtype": "Data",
+   "label": "Currency Label",
+   "default": "INR",
+   "description": "Currency code shown against money figures on the analytics screen."
+  },
+  {
+   "fieldname": "heatmap_section",
+   "fieldtype": "Section Break",
+   "label": "Delay Heatmap",
+   "description": "The heatmap groups late deliveries into four parts of the day and colours each cell by how many were late."
+  },
+  {
+   "fieldname": "heatmap_morning_end_hour",
+   "fieldtype": "Int",
+   "label": "Morning ends at hour",
+   "default": "11",
+   "description": "Deliveries before this hour count as AM. 24-hour clock."
+  },
+  {
+   "fieldname": "heatmap_midday_end_hour",
+   "fieldtype": "Int",
+   "label": "Midday ends at hour",
+   "default": "13",
+   "description": "Deliveries before this hour, and after the morning cut-off, count as Mid."
+  },
+  {
+   "fieldname": "heatmap_afternoon_end_hour",
+   "fieldtype": "Int",
+   "label": "Afternoon ends at hour",
+   "default": "17",
+   "description": "Deliveries before this hour count as PM. Anything later counts as Eve."
+  },
+  {
+   "fieldname": "heatmap_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "heatmap_some_max",
+   "fieldtype": "Int",
+   "label": "\"Some\" up to N late",
+   "default": "2",
+   "description": "Up to this many late deliveries in a cell reads as 'some'. Zero always reads as 'rare'."
+  },
+  {
+   "fieldname": "heatmap_often_max",
+   "fieldtype": "Int",
+   "label": "\"Often\" up to N late",
+   "default": "5",
+   "description": "Up to this many reads as 'often'. More than this reads as 'usually'."
+  },
+  {
+   "fieldname": "eta_section",
+   "fieldtype": "Section Break",
+   "label": "Arrival Time Estimates"
+  },
+  {
+   "fieldname": "default_minutes_per_stop",
+   "fieldtype": "Int",
+   "label": "Assumed Minutes per Stop",
+   "default": "30",
+   "description": "When a stop has no planned arrival time, one is estimated as the trip's departure plus this many minutes per stop in the route order."
+  },
+  {
+   "fieldname": "eta_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "eta_trend_threshold_mins",
+   "fieldtype": "Int",
+   "label": "ETA Trend Threshold (mins)",
+   "default": "2",
+   "description": "Average variance must change by more than this across the window before the trend is called improving or slipping."
+  },
+  {
+   "fieldname": "timing_outlier_max_mins",
+   "fieldtype": "Int",
+   "label": "Ignore Timing Gaps Over (mins)",
+   "default": "1440",
+   "description": "A stop cannot plausibly be a day late against its own trip. Where no real delivery timestamp exists the code falls back to the order's last-edited time, which moves whenever anyone touches the record and has produced gaps of several days. Any comparison wider than this is dropped from the on-time, delay, heatmap and ETA figures and counted in data_quality instead. 0 disables the filter."
+  },
+  {
+   "fieldname": "behaviour_section",
+   "fieldtype": "Section Break",
+   "label": "Section Behaviour"
+  },
+  {
+   "fieldname": "eta_fallback_enabled",
+   "fieldtype": "Check",
+   "label": "Estimate Missing Arrival Times",
+   "default": "1",
+   "description": "Delivery Stop.estimated_arrival is blank on most sites because it is only filled by ERPNext's Calculate Arrival Time / Optimise Route buttons. Ticked, a planned arrival is estimated from the trip's departure plus Assumed Minutes per Stop, which is what the trip and order screens already show. Untick to go back to leaving every on-time figure at zero."
+  },
+  {
+   "fieldname": "per_stop_variance_mode",
+   "fieldtype": "Select",
+   "label": "Per-Stop Variance Shows",
+   "options": "Cash Rounding\nTime Variance",
+   "default": "Cash Rounding",
+   "description": "Cash Rounding: the paise lost or gained when each order is settled in whole rupees, which is what makes a day's cash stop reconciling. Time Variance: the original behaviour, minutes early or late per stop. Whichever you pick, the other is still returned in the response under its own key."
+  },
+  {
+   "fieldname": "behaviour_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "cash_variance_group_by",
+   "fieldtype": "Select",
+   "label": "Group Cash Rounding By",
+   "options": "Day\nTrip",
+   "default": "Day",
+   "description": "Day matches how cash is actually handed over - Driver Collection and Cash Submission are both per driver per day - so a daily total is the figure that reconciles against a handover. Trip breaks it down further for drivers running several rounds a day."
+  },
+  {
+   "fieldname": "limits_section",
+   "fieldtype": "Section Break",
+   "label": "List Sizes",
+   "description": "The longest list each section will return. Anything beyond is cut off."
+  },
+  {
+   "fieldname": "trip_timeline_limit",
+   "fieldtype": "Int",
+   "label": "Trip Timeline rows",
+   "default": "30"
+  },
+  {
+   "fieldname": "cash_compliance_limit",
+   "fieldtype": "Int",
+   "label": "Cash Submission Compliance rows",
+   "default": "15"
+  },
+  {
+   "fieldname": "limit_breach_limit",
+   "fieldtype": "Int",
+   "label": "Collection Limit Breach rows",
+   "default": "20"
+  },
+  {
+   "fieldname": "limits_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "discrepancy_limit",
+   "fieldtype": "Int",
+   "label": "Discrepancy History rows",
+   "default": "20"
+  },
+  {
+   "fieldname": "per_stop_variance_limit",
+   "fieldtype": "Int",
+   "label": "Per-Stop Variance rows",
+   "default": "20"
+  },
+  {
+   "fieldname": "best_worst_count",
+   "fieldtype": "Int",
+   "label": "Best / Worst trips shown",
+   "default": "3",
+   "description": "How many trips appear in each of the best and worst lists."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-09-17 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Erpera Driver App",
+ "name": "Analytics Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "write": 1
+  },
+  {
+   "role": "Delivery Manager",
+   "read": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
