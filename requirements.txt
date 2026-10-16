@@ -1,4 +1,5 @@
-# This app has no third-party Python dependencies of its own.
+# Third-party Python dependencies. Keep this in step with the `dependencies`
+# list in pyproject.toml — setup.py reads this file, flit reads that one.
 #
 # Do not list `frappe` here. The bench supplies the framework from source;
 # the `frappe` name on PyPI is an unrelated 0.0.1 placeholder, so declaring
@@ -7,3 +8,11 @@
 # Nor build tooling (setuptools, wheel, pip). An app that pins those forces
 # the pin on every bench that installs it. If a bench needs a specific
 # setuptools, pin it in that bench's own environment.
+#
+# Everything here is deliberately unpinned: a pin in an app's dependencies is
+# imposed on every bench that installs the app.
+
+# FCM HTTP v1 signs every push with an OAuth2 token minted from the service
+# account in Driver Settings. Frappe usually ships this already for its Google
+# integrations. Without it, pushes are skipped and the Error Log says so.
+google-auth

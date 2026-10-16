@@ -83,16 +83,44 @@ def _send_sms(mobile, otp, reference_dn=None):
 
 
 def _gate_cod_online(dn):
-    """COD-Online hard gate: razorpay_payment_status must be Confirmed."""
-    if (dn.get("cowberry_payment_method") or "") == "COD-Online":
-        if dn.get("razorpay_payment_status") != "Confirmed":
-            return err(
-                "PAYMENT_NOT_CONFIRMED",
-                "The customer's Razorpay payment is not yet confirmed. "
-                "Poll payment.get_status and try again once it's Confirmed.",
-                400,
-                polling_url="/api/method/erpera_driver_app.api.payment.get_status",
-            )
+    """COD-Online hard gate: an online payment must be Confirmed.
+
+    OLD (Razorpay-only, pre-CD2-I21):
+        if (dn.get("cowberry_payment_method") or "") == "COD-Online":
+            if dn.get("razorpay_payment_status") != "Confirmed":
+                return err(
+                    "PAYMENT_NOT_CONFIRMED",
+                    "The customer's Razorpay payment is not yet confirmed. "
+                    "Poll payment.get_status and try again once it's Confirmed.",
+                    400,
+                    polling_url="/api/method/erpera_driver_app.api.payment.get_status",
+                )
+
+    Now delegated to utils.payment_gate so a Juspay UPI QR payment opens the
+    gate too. Razorpay behaviour is unchanged. The error message names which
+    payment is outstanding, because a driver reading "Razorpay not confirmed"
+    while the customer is holding up a UPI QR has no idea what to do next.
+    """
+    from erpera_driver_app.utils.payment_gate import is_cod_online, payment_confirmed
+
+    if is_cod_online(dn) and not payment_confirmed(dn):
+        pending_upi = (dn.get("juspay_payment_status") or "") in ("Pending", "Created")
+        return err(
+            "PAYMENT_NOT_CONFIRMED",
+            (
+                "The customer's UPI payment is not yet confirmed. Keep the QR "
+                "on screen and poll payment.get_upi_qr_status."
+                if pending_upi else
+                "The customer's online payment is not yet confirmed. "
+                "Poll payment.get_status and try again once it's Confirmed."
+            ),
+            400,
+            polling_url=(
+                "/api/method/erpera_driver_app.api.payment.get_upi_qr_status"
+                if pending_upi else
+                "/api/method/erpera_driver_app.api.payment.get_status"
+            ),
+        )
     return None
 
 

@@ -9,6 +9,7 @@ from erpera_driver_app.utils.exceptions import (
     PaymentNotConfirmedError,
 )
 from erpera_driver_app.utils.otp import PURPOSE_POD, dispatch_otp_v2, validate_otp_v2
+from erpera_driver_app.utils.payment_gate import is_cod_online, payment_confirmed
 from erpera_driver_app.utils.response import err, ok
 from erpera_driver_app.utils.notifications import notify_collection_limit
 
@@ -259,11 +260,21 @@ def send_delivery_otp(delivery_note, customer_mobile=None):
 
         dn = frappe.get_doc("Delivery Note", delivery_note)
 
-        # HARD GATE: COD-Online requires confirmed Razorpay payment
-        payment_method = dn.get("cowberry_payment_method")
-        if payment_method == "COD-Online":
-            if dn.get("razorpay_payment_status") != "Confirmed":
-                raise PaymentNotConfirmedError()
+        # HARD GATE: COD-Online requires a confirmed online payment.
+        #
+        # OLD (Razorpay-only, pre-CD2-I21):
+        #     payment_method = dn.get("cowberry_payment_method")
+        #     if payment_method == "COD-Online":
+        #         if dn.get("razorpay_payment_status") != "Confirmed":
+        #             raise PaymentNotConfirmedError()
+        #
+        # Delegated to utils.payment_gate so a Juspay UPI QR payment opens the
+        # gate as well. A confirmed Razorpay payment still opens it exactly as
+        # before; the only change is that "Confirmed" can now come from either
+        # provider. The gate itself is unchanged in strictness — anything less
+        # than a confirmed payment still blocks the POD OTP.
+        if is_cod_online(dn) and not payment_confirmed(dn):
+            raise PaymentNotConfirmedError()
 
         mobile = customer_mobile
         if not mobile:

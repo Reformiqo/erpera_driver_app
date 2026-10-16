@@ -3,6 +3,7 @@ import hmac
 import json
 
 import frappe
+from frappe.utils import flt
 
 from erpera_driver_app.utils.response import err, ok
 
@@ -13,6 +14,22 @@ def get_status(delivery_note):
         if not frappe.db.exists("Delivery Note", delivery_note):
             return err("NOT_FOUND", "Delivery note not found.", 404)
         dn = frappe.get_doc("Delivery Note", delivery_note)
+        # `payment_confirmed` is the same helper the POD gate uses, so this
+        # endpoint can never disagree with the gate about whether an order is
+        # paid. A COD-Online order may be settled by Razorpay or by a Juspay
+        # UPI QR, and a Flutter build that only reads razorpay_payment_status
+        # would sit polling forever on a UPI order.
+        #
+        # The juspay_* values are read straight off the Delivery Note — custom
+        # fields the separate `juspay_integration` app creates and writes. No
+        # import, so this keeps working on a bench where that app is absent:
+        # the keys simply come back null.
+        # The razorpay_* keys are unchanged and still always present.
+        from erpera_driver_app.utils.payment_gate import (
+            confirmed_provider,
+            payment_confirmed,
+        )
+
         return ok(data={
             "delivery_note": dn.name,
             "razorpay_payment_status": dn.get("razorpay_payment_status"),
@@ -23,6 +40,16 @@ def get_status(delivery_note):
                 else None
             ),
             "razorpay_payment_entry": dn.get("razorpay_payment_entry"),
+            "juspay_payment_status": dn.get("juspay_payment_status"),
+            "juspay_order_id": dn.get("juspay_order_id"),
+            "juspay_confirmed_at": (
+                str(dn.get("juspay_confirmed_at"))
+                if dn.get("juspay_confirmed_at")
+                else None
+            ),
+            "juspay_payment_entry": dn.get("juspay_payment_entry"),
+            "is_paid": payment_confirmed(dn),
+            "paid_via": confirmed_provider(dn),
             "polling_interval_seconds": 5,
         })
     except Exception as e:
