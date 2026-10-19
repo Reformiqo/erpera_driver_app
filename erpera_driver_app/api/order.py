@@ -332,7 +332,37 @@ def submit_proof(
         payment_type = dn.get("cowberry_payment_method") or ""
         is_cod = payment_type.startswith("COD")
 
-        if is_cod:
+        # Mirrors pod.submit_proof: an order whose payment a gateway has already
+        # confirmed has no cash to collect at the door, so there is no collected
+        # amount to validate. Keyed on payment_confirmed() alone — a COD-Cash
+        # order paid by QR is the ordinary case, not an exception. The full
+        # reasoning lives in the comment there; these two endpoints enforce one
+        # rule and must not drift apart.
+        paid_online = is_cod and payment_confirmed(dn)
+
+        # Only cash in the driver's hands belongs in the daily running total.
+        counts_as_cash = is_cod and not paid_online
+        collected = 0.0
+
+        if paid_online:
+            # Record what the gateway took, not what the driver handed over.
+            # Already stamped by the provider's confirmation in the normal
+            # case; grand_total is the fallback if that write never landed.
+            collected = float(dn.get("cod_collected_amount") or 0) \
+                or float(dn.get("grand_total") or 0)
+            dn.cod_collected_amount = collected
+            if not dn.get("cod_collection_timestamp"):
+                dn.cod_collection_timestamp = frappe.utils.now_datetime()
+            # _roll_into_collection routes on cod_payment_method, so this has to
+            # read as an online tender or a COD-Cash order paid by QR lands in
+            # total_cash and the driver is asked at handover for money that went
+            # straight to the gateway. "UPI" is what the gateway confirmation
+            # itself writes here, so the value stays consistent either way.
+            if not (dn.get("cod_payment_method") or "").lower().startswith(
+                    ("upi", "online")):
+                dn.cod_payment_method = "UPI"
+        elif is_cod:
+            # OLD (pre-CD2-I21) — unchanged for every cash order.
             # Same resolution as pod.submit_proof — these two endpoints
             # enforce one rule and must not drift apart.
             expected = expected_cod(dn)
@@ -364,14 +394,17 @@ def submit_proof(
             driver_collection = _roll_into_collection(employee, dn)
             emp = frappe.get_doc("Employee", employee)
             current = float(emp.get("current_day_collected_amount") or 0)
-            new_total = current + collected
+            new_total = current + (collected if counts_as_cash else 0)
             emp.current_day_collected_amount = new_total
             emp.current_day_collected_date = frappe.utils.today()
             emp.save(ignore_permissions=True)
             current_day_collected = new_total
             daily_limit = float(emp.get("daily_collection_limit") or 0)
             # Events 5/6 — warn at 80% of the daily ceiling, again at 100%.
-            notify_collection_limit(employee, new_total, daily_limit)
+            # Skipped when the money went straight to the gateway: warning a
+            # driver about a cash ceiling they have not moved toward is noise.
+            if counts_as_cash:
+                notify_collection_limit(employee, new_total, daily_limit)
 
         # Auto-create Sales Invoice from the Delivery Note (FRD §6.2.2 /
         # §6.3 row 12). Best-effort: a failure here doesn't roll back the

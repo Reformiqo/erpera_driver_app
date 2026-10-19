@@ -111,10 +111,38 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         # the value actually sat in `payment_type`, which then recorded a
         # zero COD amount against a real cash collection.
         from erpera_driver_app.api.trip import _raw_payment_method
+        from erpera_driver_app.utils.payment_gate import payment_confirmed
         pay_method = (_raw_payment_method(dn.name) or "")
         is_cod = pay_method.upper().startswith("COD")
         cod_amount = flt(cod_collected_amount) if cod_collected_amount is not None else 0
-        if is_cod:
+
+        # An order whose payment a gateway has already confirmed is still COD
+        # by payment method, but the driver collects NOTHING at the door — the
+        # money reached the merchant before it opened. The check below simply
+        # demanded cash equal to the order total, so every online-paid delivery
+        # failed on its final call with COD_AMOUNT_MISMATCH.
+        #
+        # Deliberately keyed on payment_confirmed() ALONE, not on the order
+        # being labelled COD-Online. A COD-Cash order is paid by QR whenever the
+        # customer turns out not to have the cash, which is the ordinary reason
+        # a driver raises one; the label says how the order was placed, the
+        # confirmation says how it was actually paid, and only the second one
+        # decides whether there is cash at the door.
+        #
+        # There is therefore no cash figure to validate: whatever the client
+        # sent is ignored and the amount recorded is the one really paid.
+        paid_online = is_cod and payment_confirmed(dn)
+
+        # Only cash in the driver's hands counts toward the daily ceiling and
+        # Employee.current_day_collected_amount. Money that went straight to
+        # the gateway is not theirs to carry, so it must not inflate either.
+        counts_as_cash = is_cod and not paid_online
+
+        if paid_online:
+            cod_amount = flt(dn.get("cod_collected_amount")) or flt(dn.grand_total)
+        elif is_cod:
+            # OLD (pre-CD2-I21) — this branch is byte-for-byte the original
+            # check and still runs for every COD-Cash order:
             # rounded_total, not grand_total — cash has no paise. See
             # erpera_driver_app.utils.cod.
             expected = expected_cod(dn)
@@ -133,7 +161,7 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         # Roll over the per-day counter if Employee.current_day_collected_date is stale.
         if str(last_date) != str(today()):
             current_collected = 0
-        if daily_limit and is_cod and (current_collected + cod_amount) > daily_limit:
+        if daily_limit and counts_as_cash and (current_collected + cod_amount) > daily_limit:
             return err(
                 "COLLECTION_LIMIT_EXCEEDED",
                 f"This delivery would push today's cash ({current_collected + cod_amount}) "
@@ -143,9 +171,17 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
 
         # 4) Atomic side-effects ---------------------------------------------------
         sales_invoice_name = _create_sales_invoice(dn)
-        collection_name = _roll_into_driver_collection(employee, dn, cod_amount, pay_method)
+        # _roll_into_driver_collection decides cash-vs-online from the method
+        # string it is handed. A confirmed online payment belongs in
+        # total_online whatever the order was labelled — a COD-Cash order paid
+        # by QR would otherwise land in total_cash, which is the one figure the
+        # end-of-day handover asks the driver to produce, for money that went
+        # straight to the gateway.
+        collection_method = "COD-Online" if paid_online else pay_method
+        collection_name = _roll_into_driver_collection(
+            employee, dn, cod_amount, collection_method)
 
-        new_collected = current_collected + (cod_amount if is_cod else 0)
+        new_collected = current_collected + (cod_amount if counts_as_cash else 0)
         frappe.db.set_value("Employee", employee, {
             "current_day_collected_amount": new_collected,
             "current_day_collected_date":   today(),
@@ -154,7 +190,7 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         # Events 5/6 — warn at 80% of the daily ceiling, again at 100%. Placed
         # after the write so the notification quotes the total the driver will
         # see on their next `collection.get_today`.
-        if is_cod:
+        if counts_as_cash:
             notify_collection_limit(employee, new_collected, daily_limit)
 
         update = dict(timestamp_for("Delivered"))
@@ -186,7 +222,7 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         mark_stop_visited(delivery_note)
 
         limit_warning = (
-            bool(daily_limit) and is_cod and new_collected >= (daily_limit * 0.8)
+            bool(daily_limit) and counts_as_cash and new_collected >= (daily_limit * 0.8)
         )
         invoice_pdf_url = (
             "/api/method/frappe.utils.print_format.download_pdf"
