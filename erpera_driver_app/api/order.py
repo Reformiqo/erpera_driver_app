@@ -353,6 +353,7 @@ def submit_proof(
             dn.cod_collected_amount = collected
             if not dn.get("cod_collection_timestamp"):
                 dn.cod_collection_timestamp = frappe.utils.now_datetime()
+
             # _roll_into_collection routes on cod_payment_method, so this has to
             # read as an online tender or a COD-Cash order paid by QR lands in
             # total_cash and the driver is asked at handover for money that went
@@ -361,6 +362,7 @@ def submit_proof(
             if not (dn.get("cod_payment_method") or "").lower().startswith(
                     ("upi", "online")):
                 dn.cod_payment_method = "UPI"
+
         elif is_cod:
             # OLD (pre-CD2-I21) — unchanged for every cash order.
             # Same resolution as pod.submit_proof — these two endpoints
