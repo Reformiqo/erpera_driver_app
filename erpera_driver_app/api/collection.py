@@ -157,9 +157,31 @@ def get_screen(date=None):
                  FROM `tabDelivery Stop` ds
                  JOIN `tabDelivery Note` dn ON dn.name = ds.delivery_note
                  JOIN `tabDelivery Trip`  dt ON dt.name = ds.parent
-                WHERE dt.driver = %s AND DATE(dt.departure_time) = %s""",
+                WHERE dt.driver = %s
+                  AND dt.docstatus < 2
+                  AND DATE(dt.departure_time) = %s""",
             (drv, target), as_dict=True,
         ) if drv else []
+
+        # Keep a list of Delivery Notes assigned to any non-cancelled trip for
+        # this driver. The collection-row fallback below includes deliveries
+        # from trips that departed on another date, but must never resurrect a
+        # Delivery Note whose trip was cancelled.
+        active_trip_delivery_notes = set()
+        if drv:
+            active_trip_delivery_notes = {
+                row.delivery_note
+                for row in frappe.db.sql(
+                    """SELECT DISTINCT ds.delivery_note
+                         FROM `tabDelivery Stop` ds
+                         JOIN `tabDelivery Trip` dt ON dt.name = ds.parent
+                        WHERE dt.driver = %s
+                          AND dt.docstatus < 2
+                          AND IFNULL(ds.delivery_note, '') != ''""",
+                    (drv,),
+                    as_dict=True,
+                )
+            }
 
         def _add(dn_name, customer, amt, ptype, cash_taken):
             """Append one order row and fold it into the day's totals.
@@ -259,6 +281,9 @@ def get_screen(date=None):
         # would be missing from a screen that is meant to reconcile it.
         for dn_name, row in collected_rows.items():
             if dn_name in seen:
+                continue
+            # Do not re-add collection rows belonging only to cancelled trips.
+            if dn_name not in active_trip_delivery_notes:
                 continue
             seen.add(dn_name)
             amt, ptype, settled = _from_collection_row(row, dn_name)
