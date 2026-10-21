@@ -332,12 +332,13 @@ def submit_proof(
         payment_type = dn.get("cowberry_payment_method") or ""
         is_cod = payment_type.startswith("COD")
 
-        # Mirrors pod.submit_proof: a COD-Online order whose payment a gateway
-        # has already confirmed has no cash to collect at the door, so there is
-        # no collected amount to validate. The full reasoning lives in the
-        # comment there — these two endpoints enforce one rule and must not
-        # drift apart.
-        paid_online = is_cod and is_cod_online(dn) and payment_confirmed(dn)
+        # Mirrors pod.submit_proof: an order whose payment a gateway has already
+        # confirmed has no cash to collect at the door, so there is no collected
+        # amount to validate. Keyed on payment_confirmed() alone — a COD-Cash
+        # order paid by QR is the ordinary case, not an exception. The full
+        # reasoning lives in the comment there; these two endpoints enforce one
+        # rule and must not drift apart.
+        paid_online = is_cod and payment_confirmed(dn)
 
         # Only cash in the driver's hands belongs in the daily running total.
         counts_as_cash = is_cod and not paid_online
@@ -352,8 +353,16 @@ def submit_proof(
             dn.cod_collected_amount = collected
             if not dn.get("cod_collection_timestamp"):
                 dn.cod_collection_timestamp = frappe.utils.now_datetime()
-            if not dn.get("cod_payment_method"):
-                dn.cod_payment_method = payment_method or "Online"
+
+            # _roll_into_collection routes on cod_payment_method, so this has to
+            # read as an online tender or a COD-Cash order paid by QR lands in
+            # total_cash and the driver is asked at handover for money that went
+            # straight to the gateway. "UPI" is what the gateway confirmation
+            # itself writes here, so the value stays consistent either way.
+            if not (dn.get("cod_payment_method") or "").lower().startswith(
+                    ("upi", "online")):
+                dn.cod_payment_method = "UPI"
+
         elif is_cod:
             # OLD (pre-CD2-I21) — unchanged for every cash order.
             # Same resolution as pod.submit_proof — these two endpoints

@@ -111,27 +111,27 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         # the value actually sat in `payment_type`, which then recorded a
         # zero COD amount against a real cash collection.
         from erpera_driver_app.api.trip import _raw_payment_method
-        from erpera_driver_app.utils.payment_gate import (
-            is_cod_online, payment_confirmed,
-        )
+        from erpera_driver_app.utils.payment_gate import payment_confirmed
         pay_method = (_raw_payment_method(dn.name) or "")
         is_cod = pay_method.upper().startswith("COD")
         cod_amount = flt(cod_collected_amount) if cod_collected_amount is not None else 0
 
-        # A COD-Online order whose payment is already confirmed is COD by
-        # payment method, but the driver collects NOTHING at the door — the
-        # money reached the merchant before it opened. Until CD2-I21 no order
-        # ever actually reached this point in that state, so the check below
-        # simply demanded cash equal to the order total, and every online-paid
-        # delivery failed on its final call with COD_AMOUNT_MISMATCH.
+        # An order whose payment a gateway has already confirmed is still COD
+        # by payment method, but the driver collects NOTHING at the door — the
+        # money reached the merchant before it opened. The check below simply
+        # demanded cash equal to the order total, so every online-paid delivery
+        # failed on its final call with COD_AMOUNT_MISMATCH.
         #
-        # There is no cash figure to validate here, so whatever the client
+        # Deliberately keyed on payment_confirmed() ALONE, not on the order
+        # being labelled COD-Online. A COD-Cash order is paid by QR whenever the
+        # customer turns out not to have the cash, which is the ordinary reason
+        # a driver raises one; the label says how the order was placed, the
+        # confirmation says how it was actually paid, and only the second one
+        # decides whether there is cash at the door.
+        #
+        # There is therefore no cash figure to validate: whatever the client
         # sent is ignored and the amount recorded is the one really paid.
-        # `_roll_into_driver_collection` puts it in Driver Collection's
-        # total_online rather than total_cash — the payment method still reads
-        # COD-Online — and the end-of-day handover reconciles against
-        # total_cash alone, so the driver is never asked to produce it.
-        paid_online = is_cod and is_cod_online(dn) and payment_confirmed(dn)
+        paid_online = is_cod and payment_confirmed(dn)
 
         # Only cash in the driver's hands counts toward the daily ceiling and
         # Employee.current_day_collected_amount. Money that went straight to
@@ -171,7 +171,15 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
 
         # 4) Atomic side-effects ---------------------------------------------------
         sales_invoice_name = _create_sales_invoice(dn)
-        collection_name = _roll_into_driver_collection(employee, dn, cod_amount, pay_method)
+        # _roll_into_driver_collection decides cash-vs-online from the method
+        # string it is handed. A confirmed online payment belongs in
+        # total_online whatever the order was labelled — a COD-Cash order paid
+        # by QR would otherwise land in total_cash, which is the one figure the
+        # end-of-day handover asks the driver to produce, for money that went
+        # straight to the gateway.
+        collection_method = "COD-Online" if paid_online else pay_method
+        collection_name = _roll_into_driver_collection(
+            employee, dn, cod_amount, collection_method)
 
         new_collected = current_collected + (cod_amount if counts_as_cash else 0)
         frappe.db.set_value("Employee", employee, {
