@@ -19,6 +19,7 @@ from erpera_driver_app.utils.cod import expected_cod
 from erpera_driver_app.utils.response import err, ok
 from erpera_driver_app.utils.status_timestamps import stamp_completed, timestamp_for
 from erpera_driver_app.utils.trip_sync import mark_stop_visited, trip_for_delivery_note
+from erpera_driver_app.utils.cowberry_sync import push_order_status
 from erpera_driver_app.utils.notifications import notify_collection_limit
 
 MAX_PHOTO_BYTES = 5 * 1024 * 1024  # spec: max 5 MB
@@ -220,6 +221,8 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         # In Transit / Completed. Best-effort — the response below is
         # unchanged whether or not the roll-up lands.
         mark_stop_visited(delivery_note)
+
+        push_order_status(delivery_note, "Delivered")
 
         limit_warning = (
             bool(daily_limit) and counts_as_cash and new_collected >= (daily_limit * 0.8)
