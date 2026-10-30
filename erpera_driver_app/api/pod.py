@@ -16,6 +16,7 @@ from frappe.utils import flt, now_datetime, today
 
 from erpera_driver_app.api.driver import _require_driver
 from erpera_driver_app.utils.cod import expected_cod
+from erpera_driver_app.utils.otp import pod_otp_required
 from erpera_driver_app.utils.response import err, ok
 from erpera_driver_app.utils.status_timestamps import stamp_completed, timestamp_for
 from erpera_driver_app.utils.trip_sync import mark_stop_visited, trip_for_delivery_note
@@ -89,22 +90,35 @@ def submit_proof(delivery_note=None, validation_token=None, photo_url=None,
         employee = _require_driver()
         if not delivery_note:
             return err("VALIDATION_ERROR", "`delivery_note` is required.", 400)
-        if not validation_token:
+        # OLD (OTP always mandatory) — the token was required unconditionally:
+        #     if not validation_token:
+        #         return err("VALIDATION_ERROR",
+        #                    "`validation_token` is required.", 400)
+        otp_required = pod_otp_required()
+        if otp_required and not validation_token:
             return err("VALIDATION_ERROR", "`validation_token` is required.", 400)
         if not frappe.db.exists("Delivery Note", delivery_note):
             return err("NOT_FOUND", f"Delivery Note '{delivery_note}' not found.", 404)
         dn = frappe.get_doc("Delivery Note", delivery_note)
 
-        # 1) Token check
-        stored = dn.get("validation_token") or ""
-        token_expires = dn.get("validation_token_expires_at")
-        if stored != validation_token:
-            return err("OTP_INVALID",
-                       "validation_token does not match the one issued for this delivery.",
-                       400)
-        if token_expires and now_datetime() > token_expires:
-            return err("OTP_INVALID",
-                       "validation_token has expired. Validate the OTP again.", 400)
+        # 1) Token check — whenever a token is in play, valid or nothing.
+        #
+        # Deliberately NOT skipped when the setting is off. "Optional" means
+        # the driver need not collect an OTP, not that a wrong one passes: a
+        # client that sends a stale or mistyped token has not confirmed
+        # anything, and accepting it would record a verified delivery that
+        # never happened. With the setting off and no token sent, there is
+        # nothing to check and the delivery proceeds.
+        if validation_token:
+            stored = dn.get("validation_token") or ""
+            token_expires = dn.get("validation_token_expires_at")
+            if stored != validation_token:
+                return err("OTP_INVALID",
+                           "validation_token does not match the one issued for this delivery.",
+                           400)
+            if token_expires and now_datetime() > token_expires:
+                return err("OTP_INVALID",
+                           "validation_token has expired. Validate the OTP again.", 400)
 
         # 2) COD amount check (only when COD-*)
         # Resolve across every field that can carry the payment method —
