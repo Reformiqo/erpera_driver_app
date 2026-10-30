@@ -8,6 +8,7 @@ from frappe.utils import flt
 
 from erpera_driver_app.api.driver import _require_driver
 from erpera_driver_app.utils.exceptions import NotDriverError
+from erpera_driver_app.utils.otp import pod_otp_required
 from erpera_driver_app.utils.response import err, ok
 
 
@@ -56,8 +57,14 @@ def get():
     Shape matches the spec exactly: employee, employee_name, cell_number,
     designation, default_warehouse, vehicle_assigned, daily_collection_limit,
     current_day_collected, app_version, offline_zone_radius_km — plus
-    offline_map_zone, the driver's assigned map zones (additive; every spec
-    key keeps its existing name and meaning).
+    offline_map_zone, the driver's assigned map zones, and require_pod_otp
+    (all additive; every spec key keeps its existing name and meaning).
+
+    require_pod_otp is site configuration rather than anything about this
+    driver, but it belongs on the call the app already makes at startup:
+    the alternative is a second round-trip, or reading it per order from
+    get_order_detail, which is too late to lay out the delivery screen.
+    It carries the Driver Settings fieldname so the two cannot drift.
     """
     try:
         emp_name = _require_driver()
@@ -74,6 +81,11 @@ def get():
             "app_version":            emp.get("app_version"),
             "offline_zone_radius_km": emp.get("offline_zone_radius_km"),
             "offline_map_zone":       _offline_map_zones(emp),
+            # Whether the PoD OTP step is mandatory on this site. False means
+            # pod.submit_proof accepts a completion with no validation_token,
+            # so the app can skip the Send OTP / Enter OTP screens entirely.
+            # A wrong or expired token is still rejected either way.
+            "require_pod_otp":        pod_otp_required(),
         })
     except NotDriverError as e:
         return e.to_response()
