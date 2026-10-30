@@ -8,7 +8,12 @@ from erpera_driver_app.utils.exceptions import (
     OTPInvalidError,
     PaymentNotConfirmedError,
 )
-from erpera_driver_app.utils.otp import PURPOSE_POD, dispatch_otp_v2, validate_otp_v2
+from erpera_driver_app.utils.otp import (
+    PURPOSE_POD,
+    dispatch_otp_v2,
+    pod_otp_required,
+    validate_otp_v2,
+)
 from erpera_driver_app.utils.payment_gate import is_cod_online, payment_confirmed
 from erpera_driver_app.utils.response import err, ok
 from erpera_driver_app.utils.notifications import notify_collection_limit
@@ -154,6 +159,10 @@ def get_order_detail(delivery_note=None):
             "payment_type":          payment_type,
             "cod_amount":            cod_amount,
             "otp_status":            otp_status,
+            # Lets the Stop Detail screen show or hide the OTP step
+            # instead of hardcoding it. False means submit_proof will
+            # accept a completion with no OTP.
+            "otp_required":          pod_otp_required(),
             "reschedule_count":      reschedule_count,
             "stop_sequence":         stop_sequence,
             "expected_arrival_time": str(eta_resolved) if eta_resolved else None,
@@ -296,8 +305,8 @@ def send_delivery_otp(delivery_note, customer_mobile=None):
 @frappe.whitelist()
 def submit_proof(
     delivery_note,
-    otp_log_name,
-    otp,
+    otp_log_name=None,
+    otp=None,
     proof_image=None,
     signature=None,
     latitude=None,
@@ -326,7 +335,26 @@ def submit_proof(
         if not frappe.db.exists("Delivery Note", delivery_note):
             raise DeliveryNoteNotFoundError()
 
-        validate_otp_v2(log_name=otp_log_name, otp_input=otp)
+        # OLD (OTP always mandatory) — otp_log_name and otp were required
+        # positional arguments and were always verified:
+        #     validate_otp_v2(log_name=otp_log_name, otp_input=otp)
+        #
+        # Driver Settings.require_pod_otp now decides. Both arguments keep
+        # working unchanged when it is on; they gained `=None` defaults so a
+        # client has something valid to send when it is off.
+        #
+        # A supplied OTP is verified either way: "optional" means the driver
+        # need not collect one, not that a wrong one passes. Only the case of
+        # the setting being off AND nothing supplied skips verification.
+        otp_required = pod_otp_required()
+        if otp_required and not (otp_log_name and otp):
+            return err(
+                "VALIDATION_ERROR",
+                "`otp_log_name` and `otp` are required. Driver Settings has "
+                "'Require OTP for Proof of Delivery' switched on.",
+            )
+        if otp_log_name and otp:
+            validate_otp_v2(log_name=otp_log_name, otp_input=otp)
 
         dn = frappe.get_doc("Delivery Note", delivery_note)
         payment_type = dn.get("cowberry_payment_method") or ""

@@ -3,7 +3,7 @@ import random
 import string
 
 import frappe
-from frappe.utils import add_to_date, now_datetime
+from frappe.utils import add_to_date, cint, now_datetime
 
 PURPOSE_POD = "POD"
 PURPOSE_CASH_SUBMISSION = "CASH_SUBMISSION"
@@ -23,6 +23,36 @@ _PURPOSE_LABELS = {
 
 def _get_settings():
     return frappe.get_single("Driver Settings")
+
+
+def pod_otp_required():
+    """Whether a customer OTP must be verified before a delivery completes.
+
+    Driven by Driver Settings.require_pod_otp so operations can turn the
+    step off per site without a deploy.
+
+    An UNSET value means ON, and that default is the whole reason this
+    reads the raw value rather than trusting the field's own default.
+    Driver Settings is a Single, so the row in `tabSingles` already exists
+    on every live site; adding a field with `"default": "1"` to the DocType
+    JSON does not write anything into that existing row, and
+    get_single_value then returns None. Defaulting None to False would
+    have turned proof-of-delivery OTP off on production the moment this
+    shipped, silently, with the desk still showing the box ticked.
+
+    patches/v0_5_0/add_require_pod_otp_setting.py writes the 1 so the form
+    agrees with what the code enforces; this fallback is what makes the
+    window between deploy and patch safe.
+
+    A blank string counts as unset for the same reason. cint("") is 0, so
+    reading it as a value would mean a row written without one switches the
+    OTP off. Only a stored 0 does that, and only an admin unticking the box
+    writes a stored 0.
+    """
+    value = frappe.db.get_single_value("Driver Settings", "require_pod_otp")
+    if value is None or value == "":
+        return True
+    return bool(cint(value))
 
 
 def _deliver_via_email(recipient, subject, body):
