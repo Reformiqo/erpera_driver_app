@@ -12,6 +12,7 @@ def after_install():
 def _seed_driver_settings():
     if not frappe.db.exists("Driver Settings", "Driver Settings"):
         doc = frappe.new_doc("Driver Settings")
+        doc.require_pod_otp = 1
         doc.otp_validity_pod = 10
         doc.otp_validity_cash_submission = 10
         doc.otp_validity_wallet = 10

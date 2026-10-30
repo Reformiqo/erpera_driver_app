@@ -5,6 +5,7 @@
  "engine": "InnoDB",
  "field_order": [
   "otp_section",
+  "require_pod_otp",
   "otp_validity_pod",
   "otp_validity_cash_submission",
   "otp_validity_wallet",
@@ -27,6 +28,7 @@
  ],
  "fields": [
   {"fieldname": "otp_section", "fieldtype": "Section Break", "label": "OTP Settings"},
+  {"fieldname": "require_pod_otp", "fieldtype": "Check", "label": "Require OTP for Proof of Delivery", "default": "1", "description": "On: a delivery cannot be completed until the customer's OTP has been verified. Off: the OTP step becomes optional \u2014 drivers may still send and verify one, and it is still checked when supplied, but a delivery can be completed without it. Leave this on unless proof of delivery is being captured some other way."},
   {"fieldname": "otp_validity_pod", "fieldtype": "Int", "label": "OTP Validity POD (minutes)", "default": "10"},
   {"fieldname": "otp_validity_cash_submission", "fieldtype": "Int", "label": "OTP Validity Cash Submission (minutes)", "default": "10"},
   {"fieldname": "otp_validity_wallet", "fieldtype": "Int", "label": "OTP Validity Wallet (minutes)", "default": "10"},
@@ -49,7 +51,7 @@
  ],
  "issingle": 1,
  "links": [],
- "modified": "2024-01-01 00:00:00.000000",
+ "modified": "2026-10-30 16:45:00.000000",
  "modified_by": "Administrator",
  "module": "Erpera Driver App",
  "name": "Driver Settings",

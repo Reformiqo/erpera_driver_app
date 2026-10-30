@@ -8,7 +8,7 @@ remember the transition map.
 import json
 
 import frappe
-from frappe.utils import flt, getdate, now_datetime, today
+from frappe.utils import cint, flt, getdate, now_datetime, today
 
 from erpera_driver_app.api.driver import _require_driver
 from erpera_driver_app.utils.cod import collected_cod, expected_cod
@@ -17,6 +17,7 @@ from erpera_driver_app.utils.exceptions import (
     InvalidStatusTransitionError,
 )
 from erpera_driver_app.utils.geo import validate_coords
+from erpera_driver_app.utils.otp import pod_otp_required
 from erpera_driver_app.utils.response import err, ok
 from erpera_driver_app.utils.status_timestamps import stamp_status, timestamp_for
 from erpera_driver_app.utils.trip_sync import mark_stop_visited, sync_trip_status
@@ -120,6 +121,29 @@ def _do_update_status(delivery_note, target_status, gps_lat=None, gps_lng=None,
     if target_status == "At Location" and (gps_lat is None or gps_lng is None):
         return err("VALIDATION_ERROR",
                    "GPS coordinates required for 'At Location' status.", 400)
+
+    # "Delivered" is reachable straight from here (the transition is allowed
+    # from Out for Delivery and At Location), which made this a way around
+    # the proof-of-delivery OTP entirely: no token, no OTP Log, no customer
+    # confirmation, just a status write. Both submit_proof endpoints could
+    # enforce the OTP perfectly and a client calling this instead would
+    # still land a delivery as Delivered.
+    #
+    # So the setting has to be honoured here too, or "mandatory" is not
+    # what it says. The evidence this looks for is DN.otp_validated, which
+    # otp.validate_pod_otp sets; the two submit_proof endpoints do their own
+    # checking and set Delivered themselves, so they never come through here.
+    if target_status == "Delivered" and pod_otp_required() \
+            and not cint(dn.get("otp_validated")):
+        return err(
+            "OTP_REQUIRED",
+            "This delivery needs the customer's OTP before it can be marked "
+            "Delivered. Verify it with otp.validate_pod_otp and complete the "
+            "delivery through pod.submit_proof. To allow deliveries without "
+            "an OTP, switch off 'Require OTP for Proof of Delivery' in "
+            "Driver Settings.",
+            400,
+        )
 
     coords = None
     if gps_lat is not None and gps_lng is not None:
