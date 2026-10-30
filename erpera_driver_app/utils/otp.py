@@ -25,31 +25,50 @@ def _get_settings():
     return frappe.get_single("Driver Settings")
 
 
+def _raw_single_value(doctype, fieldname):
+    """The stored value from `tabSingles`, or None when no row exists.
+
+    Deliberately NOT frappe.db.get_single_value. That helper ends with
+    `val = cast(df.fieldtype, val)`, and cast("Check", None) is cint(None),
+    which is 0 — so for a Check field it can never return None. "Nobody has
+    configured this" and "an admin switched it off" both come back as 0 and
+    become indistinguishable, which is the whole decision this module makes.
+
+    It also throws Invalid field name when the field is not in the meta yet,
+    so a site that has pulled the code but not yet migrated would get an
+    exception out of every delivery endpoint rather than a safe default.
+
+    Reading the table directly avoids both.
+    """
+    row = frappe.db.sql(
+        "SELECT `value` FROM `tabSingles` WHERE `doctype` = %s AND `field` = %s LIMIT 1",
+        (doctype, fieldname),
+    )
+    return row[0][0] if row else None
+
+
 def pod_otp_required():
     """Whether a customer OTP must be verified before a delivery completes.
 
     Driven by Driver Settings.require_pod_otp so operations can turn the
     step off per site without a deploy.
 
-    An UNSET value means ON, and that default is the whole reason this
-    reads the raw value rather than trusting the field's own default.
-    Driver Settings is a Single, so the row in `tabSingles` already exists
-    on every live site; adding a field with `"default": "1"` to the DocType
-    JSON does not write anything into that existing row, and
-    get_single_value then returns None. Defaulting None to False would
-    have turned proof-of-delivery OTP off on production the moment this
-    shipped, silently, with the desk still showing the box ticked.
+    NO STORED ROW MEANS ON. Driver Settings is a Single, so its row in
+    `tabSingles` already exists on every live site; adding a field with
+    `"default": "1"` to the DocType JSON writes nothing into that existing
+    row, because a DocType default applies when a document is created and
+    this one was created long ago. Until something writes the value there
+    is simply no row for this field, and reading that absence as off would
+    turn proof-of-delivery OTP off on every site the moment this shipped —
+    silently, with the desk still showing the box ticked.
 
-    patches/v0_5_0/add_require_pod_otp_setting.py writes the 1 so the form
-    agrees with what the code enforces; this fallback is what makes the
-    window between deploy and patch safe.
+    Only a row holding 0 switches it off, and only an admin unticking the
+    box, or the v0_5_0 patch, writes a row at all. A row holding a blank
+    string counts as absent for the same reason: cint("") is 0.
 
-    A blank string counts as unset for the same reason. cint("") is 0, so
-    reading it as a value would mean a row written without one switches the
-    OTP off. Only a stored 0 does that, and only an admin unticking the box
-    writes a stored 0.
+    See _raw_single_value for why this cannot use get_single_value.
     """
-    value = frappe.db.get_single_value("Driver Settings", "require_pod_otp")
+    value = _raw_single_value("Driver Settings", "require_pod_otp")
     if value is None or value == "":
         return True
     return bool(cint(value))

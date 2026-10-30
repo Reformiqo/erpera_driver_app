@@ -42,8 +42,14 @@ def execute():
 			)
 			return
 
-		if frappe.db.get_single_value(
-				"Driver Settings", "require_pod_otp") is not None:
+		# NOT get_single_value: it ends in cast(df.fieldtype, val), and
+		# cast("Check", None) is 0, so an absent row comes back as 0 and
+		# "is not None" is true for a field nobody has ever set. That is
+		# what made the first version of this patch return here without
+		# writing anything, on a site where the row did not exist.
+		from erpera_driver_app.utils.otp import _raw_single_value
+
+		if _raw_single_value("Driver Settings", "require_pod_otp") is not None:
 			return
 
 		frappe.db.set_single_value("Driver Settings", "require_pod_otp", 1)
